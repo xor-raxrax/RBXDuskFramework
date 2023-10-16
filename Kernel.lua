@@ -1,43 +1,29 @@
-local kernelFolder = script.Parent
-
+local shared = shared
 local buildclass = shared.buildclass
-local buildsingleton = shared.buildsingleton
-
-local kernelVariables = {} do
-	local rootFolder = shared.rootFolder
-	
-	kernelVariables.KernelFolder = kernelFolder
-	kernelVariables.KernelLibraries = kernelFolder.Libraries
-	kernelVariables.KernelClasses = kernelFolder.Classes
-	
-	kernelVariables.RootFolder = rootFolder
-	kernelVariables.Libraries = rootFolder.Libraries
-	kernelVariables.Classes = rootFolder.Classes
-	kernelVariables.Enums = rootFolder.Enums
-end
+local kernelSettings = shared.kernelSettings
 
 local Module = {} do
-	
+
 	function Module.new(module : Instance)
 		local self = setmetatable({}, Module)
-		
+
 		self._Instance = module
 		self._IsInitialized = false
 		self._ReturnValue = nil
-		
+
 		return self
 	end
-	
+
 	function Module:GetReturnValue()
 		if self._IsInitialized then
 			return self._ReturnValue
 		end
-		
+
 		local result = require(self._Instance)
 		self._ReturnValue = result
 		return result
 	end
-	
+
 	buildclass("Module", Module)
 end
 
@@ -45,31 +31,31 @@ local errorf = shared.errorf
 local expecttype = shared.expecttype
 
 local ModuleCollector = {} do
-	
+
 	function ModuleCollector.new(folder, fileTypeName)
 		local self = setmetatable({}, ModuleCollector)
-		
+
 		self.RootFolder = folder
 		self.Modules = {}
 		self.ModulesTypeName = fileTypeName
-		
+
 		return self
 	end
-	
+
 	function ModuleCollector:_Collect()
 		for _, file in next, self.RootFolder:GetDescendants() do
 			if not file:IsA("ModuleScript") then continue end
-			
+
 			self:_AddModule(file)
 		end
 	end
-	
+
 	function ModuleCollector:_AddModule(file)
 		local name = file.Name
 		self:_ThrowOnNameConflict(name, file)
 		self.Modules[name] = Module.new(file)
 	end
-	
+
 	function ModuleCollector:_ThrowOnNameConflict(name, newFile)
 		local existingFile = self.Modules[name]
 		if existingFile then
@@ -80,75 +66,131 @@ local ModuleCollector = {} do
 			)
 		end
 	end
-	
+
 	function ModuleCollector:_GetModule(name, noThrow)
 		expecttype(name, "string")
-		
+
 		local module = self.Modules[name]
 		if module then
 			return module
 		end
-		
+
 		if not noThrow then
 			errorf("'%s' is invalid %s name", name, self.ModulesTypeName)
 		end
 	end
-	
+
 	function ModuleCollector:_GetModuleReturnValue(name, noThrow)
 		local module = self:_GetModule(name, noThrow)
 		if module then
 			return module:GetReturnValue()
 		end
 	end
-	
+
 	buildclass("ModuleCollector", ModuleCollector)
 end
 
-
 local Package = {} do
-	
+
 	function Package.new(manager, rootFolder)
 		local self = setmetatable(ModuleCollector.new(rootFolder, "class"), Package)
-		
+
 		self.Name = rootFolder.Name
 		self._ModuleToName = {}
 		self._PackageManager = manager
+		self.Enums = nil
+		self._EnumsModule = nil
 		
 		return self
 	end
-	
+
 	function Package:GetClass(name)
 		return self:_GetModuleReturnValue(name)
 	end
 	
-	local override = {}
+	local initializeEnums do
+		local invalidIndexHandler = {}
+		function invalidIndexHandler:__index(name)
+			errorf("Enum '%s' has no '%s' member", self.__Name, name)
+		end
+		
+		function initializeEnums(enums)
+			for enumName, enum in next, enums do
+				for name, value in next, enum do
+					enum[value] = name
+				end
+				enum.__Name = enumName
+				setmetatable(enum, invalidIndexHandler)
+				table.freeze(enum)
+			end
+		end
+	end
 	
+	function Package:_RegisterEnums(enumsModule)
+		if self._EnumsModule then
+			errorf("Duplicate enums in package '%s', registered: %s, new: %s",
+				self.Name,
+				self._EnumsModule:GetFullName(),
+				enumsModule:GetFullName()
+			)
+		end
+		
+		local enums = expecttype(require(enumsModule), "table")
+		initializeEnums(enums)
+		
+		self.Enums = enums
+		self._EnumsModule = enumsModule
+	end
+	
+	function Package:GetEnum(name)
+		if not self.Enums then
+			errorf("Package '%s' does not contain enums", self.Name)
+		end
+		
+		local enum = self.Enums[name]
+		if enum then
+			return enum
+		end
+		errorf("'%s' is invalid enum name", name)
+	end
+	
+	local override = {}
+
 	function override:_Collect(root)
 		for _, child in next, root:GetChildren() do
 			if child:IsA("ModuleScript") then
-				self:_AddModule(child)
+				if child.Name == kernelSettings.EnumsModuleName then
+					self:_RegisterEnums(child)
+				else
+					self:_AddModule(child)
+					self._PackageManager:AssociatedModuleWithPackage(child, self)
+				end
+				
 				self:_Collect(child)
 			elseif child:IsA("Folder") then
 				self._PackageManager:BuildPackage(child)
 			end
 		end
 	end
-	
+
 	shared.buildclassoverride("Package", Package, override, ModuleCollector)
 end
 
 local PackageManager = {} do
-	
+
 	function PackageManager.new(root)
 		local self = setmetatable({}, PackageManager)
-		
+
 		self.Packages = {}
 		self.Root = root
+		self.LocalPackageLookupUseGetfenv = kernelSettings.LocalPackageLookupUseGetfenv
+		self.ModuleToPackage = {}
+		
 		self.RootPackage = self:BuildPackage(root, "_Root")
 		
 		return self
 	end
-	
+
 	function PackageManager:BuildPackage(folder, name)
 		local package = Package.new(self, folder)
 		package:_Collect(folder)
@@ -156,38 +198,42 @@ local PackageManager = {} do
 		self.Packages[name] = package
 		return package
 	end
+
+	function PackageManager:AssociatedModuleWithPackage(module, package)
+		self.ModuleToPackage[module] = package
+	end
 	
 	function PackageManager:GetPackage(name, noThrow)
 		local package = self.Packages[name]
 		if package then
 			return package
 		end
-		
+
 		if not noThrow then
 			errorf("'%s' is invalid package name", name)
 		end
 	end
-	
+
 	function PackageManager:GetClass(name, localClassTraceOffset)
 		local localClass = self:GetLocalClass(name, localClassTraceOffset + 1, true)
 		if localClass then
 			return localClass
 		end
-		
+
 		for _, package in next, self.Packages do
 			local module = package:_GetModule(name, true)
 			if module then
 				return module:GetReturnValue()
 			end
 		end
-		
+
 		errorf("'%s' is invalid class name", name)
 	end
-	
+
 	function PackageManager:GetLocalClass(name, localClassTraceOffset, noThrow)
 		expecttype(name, "string")
 		expecttype(localClassTraceOffset, "number")
-		
+
 		local success, packageOrTrace = self:_GetLocalPackage(localClassTraceOffset)
 		if not success then
 			if not noThrow then
@@ -195,187 +241,155 @@ local PackageManager = {} do
 			end
 			return
 		end
-		
+
 		local module = packageOrTrace:_GetModule(name, noThrow)
 
 		if module then
 			return module:GetReturnValue()
 		end
 	end
-	
-	function PackageManager:_GetLocalPackage(localClassTraceOffset)
-		local trace = debug.traceback("", 2 + localClassTraceOffset)
+
+	function PackageManager:GetEnum(name, localClassTraceOffset)
+		if self.RootPackage.Enums then
+			return self.RootPackage:GetEnum(name)
+		end
+		return self.RootPackage:GetLocalEnum(name, localClassTraceOffset + 1)
+	end
+
+	function PackageManager:GetLocalEnum(name, localClassTraceOffset)
+		expecttype(name, "string")
+		expecttype(localClassTraceOffset, "number")
+
+		local success, packageOrTrace = self:_GetLocalPackage(localClassTraceOffset + 1)
+		if not success then
+			errorf("cannot extract package name from trace '%s'", packageOrTrace)
+		end
 		
+		return packageOrTrace:GetEnum(name)
+	end
+
+	local rootFolder = shared.rootFolder
+	local rootFolderName = rootFolder.Name
+	local rootFolderParentName = rootFolder.Parent.Name
+	
+	function PackageManager:_GetLocalPackage_Traceback(localClassTraceOffset)
+		local trace = debug.traceback("", 2 + localClassTraceOffset)
+
 		local lastLine = string.match(trace, "[^\n]+%s*$")
 		lastLine = string.gsub(lastLine, "\n", "")
-		
+
 		local names = {}
 		for substring in string.gmatch(lastLine, "[^.]+") do
 			table.insert(names, substring)
 		end
-		
+
 		-- last line is running class
 		table.remove(names)
 
 		for i = #names, 1, -1 do
 			local potentialPackageName = names[i]
+
+			local isRootFolder = potentialPackageName == rootFolderName
+				and names[i - 1] and names[i - 1] == rootFolderParentName
 			
-			-- special case for root package since it does not have associated folder
-			if potentialPackageName == kernelVariables.Classes.Name
-				and names[i - 1]
-				and names[i - 1] == kernelVariables.RootFolder.Name then
-				
+			if isRootFolder then
 				return true, self.RootPackage
 			end
-			
+
 			local package = self:GetPackage(potentialPackageName, true)
 			if package then
 				return true, package
 			end
 		end
-		
+
 		return false, lastLine
+	end
+
+	function PackageManager:_GetLocalPackage_Getfenv(localClassTraceOffset)
+		while true do
+			localClassTraceOffset += 1
+			local otherScript = getfenv(localClassTraceOffset).script
+			if otherScript == script then break end
+			
+			local package = self.ModuleToPackage[otherScript]
+			if package then
+				return true, package
+			end
+		end
+		
+		return true, self.RootPackage
+	end
+	
+	function PackageManager:_GetLocalPackage(localClassTraceOffset)
+		if self.LocalPackageLookupUseGetfenv then
+			return self:_GetLocalPackage_Getfenv(localClassTraceOffset + 1)
+		else
+			return self:_GetLocalPackage_Traceback(localClassTraceOffset + 1)
+		end
 	end
 	
 	buildclass("PackageManager", PackageManager)
 end
 
-local kernelSettings = assert(shared.kernelSettings)
-
-local KernelObject = {}
-buildclass("KernelObject", KernelObject)
-
-local kernelAuditor do
-	
-	local KernelAuditor = {} do
-		
-		function KernelAuditor.new()
-			local self = setmetatable({}, KernelAuditor)
-			
-			return self
-		end
-		
-		function KernelAuditor:Log(content)
-			if kernelSettings.PrintKernelLog then
-				print(content)
-			end
-		end
-		
-		function KernelAuditor:Warn(content)
-			if kernelSettings.PrintKernelWarnings then
-				warn(content)
-			end
-		end
-		
-		buildsingleton("KernelAuditor", KernelAuditor, KernelObject)
-	end
-	
-	kernelAuditor = KernelAuditor.new()
-end
-
 local Kernel = {} do
-	
+
 	function Kernel.new()
 		local self = setmetatable({}, Kernel)
 		
-		self._LibrariesCollector = ModuleCollector.new(kernelVariables.Libraries, "library")
-		self._KLibrariesCollector = ModuleCollector.new(kernelVariables.KernelLibraries, "library")
-		self._KClassCollector = ModuleCollector.new(kernelVariables.KernelClasses, "class")
+		local kernelFolder = script.Parent
+		self._KClassCollector = ModuleCollector.new(kernelFolder[kernelSettings.ClassesFolderName], "class")
+		self._KLibrariesCollector = ModuleCollector.new(kernelFolder[kernelSettings.LibrariesFolderName], "library")
 		
-		self._PackageManager = PackageManager.new(kernelVariables.Classes)
-		
-		self._LibrariesCollector:_Collect()
-		self._KLibrariesCollector:_Collect()
 		self._KClassCollector:_Collect()
+		self._KLibrariesCollector:_Collect()
 		
-		local enums = require(kernelVariables.Enums)
-		
-		local invalidIndexHandler = {}
-		function invalidIndexHandler:__index(name)
-			errorf("Enum '%s' has no '%s' member", self.__Name, name)
-		end
-		
-		for enumName, enum in next, enums do
-			for name, value in next, enum do
-				enum[value] = name
-			end
-			enum.__Name = enumName
-			setmetatable(enum, invalidIndexHandler)
-			table.freeze(enum)
-		end
-		
-		self._Enums = enums
-		
+		local rootFolder = shared.rootFolder
+		self._PackageManager = PackageManager.new(rootFolder[kernelSettings.ClassesFolderName])
+		self._LibrariesCollector = ModuleCollector.new(rootFolder[kernelSettings.LibrariesFolderName], "library")
+
+		self._LibrariesCollector:_Collect()
+
 		return self
 	end
-	
-	local function toMessage(...)
-		local message = ""
-		
-		local size = select("#", ...)
-		for i = 1, size do
-			message ..= tostring(select(i, ...))
-			if i < size then
-				message ..= " "
-			end
-		end
-		
-		return message
-	end
-	
-	function Kernel:Log(...)
-		kernelAuditor:Log(toMessage(...))
-	end
-	
-	function Kernel:Warn(...)
-		kernelAuditor:Warn(toMessage(...))
-	end
-	
-	function Kernel:GetLibrary(name)
-		return self._LibrariesCollector:_GetModuleReturnValue(name)
-			or self._KLibrariesCollector:Get(name)
-	end
-	
-	function Kernel:GetKernelLibrary(name)
-		return self._KLibrariesCollector:_GetModuleReturnValue(name)
+
+	function Kernel:GetPackage(name, noThrow)
+		return self._PackageManager:GetPackage(name, if noThrow == nil then false else noThrow)
 	end
 	
 	local expectclasstype = shared.expectclasstype
-	
+
 	function Kernel:GetClass(name)
-		return expectclasstype(
-			self._PackageManager:GetClass(name, 1) or self._KClassCollector:_GetModuleReturnValue(name),
-			name
-		)
-	end
-	
-	-- uses debug.traceback() instead of getfenv() to prevent disabling Table::safeenv
-	function Kernel:GetLocalClass(name)
-		return expectclasstype(self._PackageManager:GetLocalClass(name, 1), name)
-	end
-	
-	function Kernel:GetPackage(name, noThrow)
-		return self._PackageManager:GetPackage(name, if noThrow == nil then false else noThrow)
+		return expectclasstype(self._PackageManager:GetClass(name, 1), name)
 	end
 	
 	function Kernel:GetKernelClass(name)
 		return expectclasstype(self._KClassCollector:_GetModuleReturnValue(name), name)
 	end
 	
-	function Kernel:GetEnum(name)
-		local enum = self._Enums[name]
-		if enum then
-			return enum
-		end
-		errorf("'%s' is invalid enum name", name)
+	function Kernel:GetLocalClass(name)
+		return expectclasstype(self._PackageManager:GetLocalClass(name, 1), name)
 	end
 	
-	buildsingleton("Kernel", Kernel, KernelObject)
+	function Kernel:GetLibrary(name)
+		return self._LibrariesCollector:_GetModuleReturnValue(name)
+			or self._KLibrariesCollector:Get(name)
+	end
+
+	function Kernel:GetKernelLibrary(name)
+		return self._KLibrariesCollector:_GetModuleReturnValue(name)
+	end
+	
+	function Kernel:GetEnum(name)
+		return self._PackageManager:GetEnum(name, 1)
+	end
+
+	function Kernel:GetLocalEnum(name)
+		return self._PackageManager:GetLocalEnum(name, 1)
+	end
+
+	shared.buildsingleton("Kernel", Kernel)
 end
 
-
 kernel = Kernel.new()
-
-kernel:Log("kernel loaded")
 
 return kernel

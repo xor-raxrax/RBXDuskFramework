@@ -1,9 +1,6 @@
 local shared = shared
 
 shared.kernelSettings = {
-	PrintKernelLog = false,
-	PrintKernelWarnings = true,
-	
 	DebugMode = {
 		Enabled = false,
 		
@@ -14,6 +11,12 @@ shared.kernelSettings = {
 		SpecialMethodNames = {},
 	},
 	
+	LocalPackageLookupUseGetfenv = false,
+	
+	EnumsModuleName = "Enums",
+	ClassesFolderName = "Classes",
+	LibrariesFolderName = "Libraries",
+	
 	GenerateDefaultDestructor = true,
 	AlwaysInheritDuskObject = true,
 	
@@ -21,6 +24,8 @@ shared.kernelSettings = {
 	WarnImplicitDuskObjectInheritance = false,
 	
 	LogClassBuildingProcess = false,
+	
+	PureVirtualMethodCallError = false,
 	
 	ClassInstanceCleanupInformer = {
 		Enabled = true,

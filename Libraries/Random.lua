@@ -29,7 +29,7 @@ local function randomBinaryNonZeroString(size)
 	return result
 end
 
-function randomAlphaString(size)
+local function randomAlphaString(size)
 	local result = ""
 	for i = 1, size do
 		result ..= string.char(randomFrom2Ranges(

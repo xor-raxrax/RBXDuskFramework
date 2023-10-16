@@ -22,12 +22,12 @@ local DuskObject = shared.DuskObject do
 	end
 	
 	local expectclass = shared.expectclass
-	local isStudio = shared.isStudio
+	local pureVirtualMethodCallError = shared.kernelSettings.PureVirtualMethodCallError
 	function DuskObject:PureVirtualMethodError(name)
 		name = name or debug.info(2, "ns")
 		
 		local message = string.format("attempt to call pure virtual method %s:%s()", self.__type, name)
-		if isStudio then
+		if pureVirtualMethodCallError then
 			error(message)
 		else
 			warn(debug.traceback(message))
