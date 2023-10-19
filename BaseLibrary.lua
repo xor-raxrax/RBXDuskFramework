@@ -591,7 +591,7 @@ local buildClass, finalizeClass do
 					local ignoreSpecialMethodCallLog = debugModeSettings.IgnoreSpecialMethodCallLog
 					
 					if not ignoreSpecialMethodCallLog
-						or (ignoreSpecialMethodCallLog and not table.find(debugModeSettings.SpecialMethods, memberName)) then
+						or (ignoreSpecialMethodCallLog and not table.find(debugModeSettings.SpecialMethodNames, memberName)) then
 						
 						local lastFunction = finalMemberFunction
 						finalMemberFunction = function(...)
