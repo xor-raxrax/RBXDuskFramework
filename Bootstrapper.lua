@@ -3,30 +3,33 @@ local shared = shared
 shared.kernelSettings = {
 	DebugMode = {
 		Enabled = false,
-		
+
 		AddTostringMetamethod = true,
 		
 		LogCalls = false,
 		IgnoreSpecialMethodCallLog = true,
 		SpecialMethodNames = {},
 	},
-	
+
 	LocalPackageLookupUseGetfenv = false,
-	
+
 	EnumsModuleName = "Enums",
 	ClassesFolderName = "Classes",
 	LibrariesFolderName = "Libraries",
 	
 	GenerateDefaultDestructor = true,
 	AlwaysInheritDuskObject = true,
-	
+
 	WarnExplicitDuskObjectInheritance = true,
 	WarnImplicitDuskObjectInheritance = false,
-	
+
 	LogClassBuildingProcess = false,
-	
+
+	MethodAttributePrefix = "__attr_",
+	WarnOverrideOnMissingOverrideAttribute = true,
+
 	PureVirtualMethodCallError = false,
-	
+
 	ClassInstanceCleanupInformer = {
 		Enabled = true,
 		UseError = false,
