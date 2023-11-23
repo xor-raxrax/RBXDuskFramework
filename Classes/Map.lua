@@ -30,9 +30,7 @@ local Map = {} do
 		items[key] = value
 	end
 	
-	local override = {}
-	
-	function override:Find(value)
+	function Map:Find(value)
 		for key, pairValue in next, self.Items do
 			if pairValue == value then
 				return key
@@ -40,11 +38,11 @@ local Map = {} do
 		end
 	end
 	
-	function override:Remove(key)
+	function Map:Remove(key)
 		self:Set(key, nil)
 	end
 	
-	shared.buildclassoverride("Map", Map, override, Collection)
+	shared.buildclass("Map", Map, Collection)
 end
 
 return Map

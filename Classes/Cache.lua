@@ -54,6 +54,7 @@ local Cache = {} do
 		return item
 	end
 	
+	Cache.__attr_virtual_Store = true
 	function Cache:Store(item)
 		local inUse = self._InUse
 		local index = table.find(inUse, item)

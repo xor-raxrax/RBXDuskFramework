@@ -14,15 +14,13 @@ local CCache = {} do
 		return self
 	end
 	
-	local override = {}
-	
 	local CacheStore = Cache.Store
-	function override:Store(item)
+	function CCache:Store(item)
 		CacheStore(self, item)
 		self._Cleaner(item)
 	end
 	
-	shared.buildclassoverride("CCache", CCache, override, Cache)
+	shared.buildclass("CCache", CCache, Cache)
 end
 
 return CCache

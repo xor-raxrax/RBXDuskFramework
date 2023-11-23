@@ -51,12 +51,14 @@ local Collection = {} do
 		end
 	end
 	
+	Collection.__attr_virtual_Find = true
 	function Collection:Find(item)
 		return table.find(self.Items, item)
 	end
 	
 	local errorf = shared.errorf
 	
+	Collection.__attr_virtual_Remove = true
 	function Collection:Remove(item)
 		local pos = self:Find(item)
 		if not pos then
