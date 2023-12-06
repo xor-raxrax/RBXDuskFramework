@@ -2,10 +2,8 @@ local Collection = shared.kernel:GetKernelClass("Collection")
 
 local Vector = {} do
 	
-	function Vector.new()
-		local self = setmetatable(Collection.new(), Vector)
-		
-		return self
+	function Vector:constructor()
+		Collection.constructor(self)
 	end
 	
 	function Vector:PushBack(item)

@@ -2,10 +2,8 @@ local expecttype = shared.expecttype
 
 local Cache = {} do
 	
-	function Cache.new(constructor, defaultArguments, expansionSize)
+	function Cache:constructor(constructor, defaultArguments, expansionSize)
 		expecttype(constructor, "function")
-		
-		local self = setmetatable({}, Cache)
 		
 		self._Constructor = constructor
 		self._DefaultArguments = defaultArguments or {}
@@ -16,8 +14,6 @@ local Cache = {} do
 		
 		self._InUse = {}
 		self._InUseNextPosition = 0
-		
-		return self
 	end
 	
 	function Cache:Destroy()

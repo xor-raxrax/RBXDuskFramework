@@ -4,14 +4,10 @@ local kernelSettings = shared.kernelSettings
 
 local Module = {} do
 
-	function Module.new(module : Instance)
-		local self = setmetatable({}, Module)
-
+	function Module:constructor(module : Instance)
 		self._Instance = module
 		self._IsInitialized = false
 		self._ReturnValue = nil
-
-		return self
 	end
 
 	function Module:GetReturnValue()
@@ -32,14 +28,10 @@ local expecttype = shared.expecttype
 
 local ModuleCollector = {} do
 
-	function ModuleCollector.new(folder, fileTypeName)
-		local self = setmetatable({}, ModuleCollector)
-
+	function ModuleCollector:constructor(folder, fileTypeName)
 		self.RootFolder = folder
 		self.Modules = {}
 		self.ModulesTypeName = fileTypeName
-
-		return self
 	end
 	
 	ModuleCollector.__attr_virtual__Collect = true
@@ -93,16 +85,14 @@ end
 
 local Package = {} do
 
-	function Package.new(manager, rootFolder)
-		local self = setmetatable(ModuleCollector.new(rootFolder, "class"), Package)
+	function Package:constructor(manager, rootFolder)
+		ModuleCollector.constructor(self, rootFolder, "class")
 
 		self.Name = rootFolder.Name
 		self._ModuleToName = {}
 		self._PackageManager = manager
 		self.Enums = nil
 		self._EnumsModule = nil
-
-		return self
 	end
 
 	function Package:GetClass(name)
@@ -112,12 +102,16 @@ local Package = {} do
 	local initializeEnums do
 		local invalidIndexHandler = {}
 		function invalidIndexHandler:__index(name)
-			errorf("Enum '%s' has no '%s' member", self.__Name, name)
+			errorf("Enum '%s' has no '%s' member", self.__Name, tostring(name))
 		end
-
+		
 		function initializeEnums(enums)
 			for enumName, enum in next, enums do
+				local toAdd = {}
 				for name, value in next, enum do
+					toAdd[value] = name
+				end
+				for value, name in next, toAdd do
 					enum[value] = name
 				end
 				enum.__Name = enumName
@@ -177,17 +171,13 @@ end
 
 local PackageManager = {} do
 
-	function PackageManager.new(root)
-		local self = setmetatable({}, PackageManager)
-
+	function PackageManager:constructor(root)
 		self.Packages = {}
 		self.Root = root
 		self.LocalPackageLookupUseGetfenv = kernelSettings.LocalPackageLookupUseGetfenv
 		self.ModuleToPackage = {}
 
 		self.RootPackage = self:BuildPackage(root, "_Root")
-
-		return self
 	end
 
 	function PackageManager:BuildPackage(folder, name)
@@ -332,9 +322,7 @@ end
 
 local Kernel = {} do
 
-	function Kernel.new()
-		local self = setmetatable({}, Kernel)
-
+	function Kernel:constructor()
 		local kernelFolder = script.Parent
 		self._KClassCollector = ModuleCollector.new(kernelFolder[kernelSettings.ClassesFolderName], "class")
 		self._KLibrariesCollector = ModuleCollector.new(kernelFolder[kernelSettings.LibrariesFolderName], "library")
@@ -347,12 +335,15 @@ local Kernel = {} do
 		self._LibrariesCollector = ModuleCollector.new(rootFolder[kernelSettings.LibrariesFolderName], "library")
 
 		self._LibrariesCollector:_Collect()
-
-		return self
 	end
 
 	function Kernel:GetPackage(name, noThrow)
-		return self._PackageManager:GetPackage(name, if noThrow == nil then false else noThrow)
+		return self._PackageManager:GetPackage(name, if noThrow == nil then false else expecttype(noThrow, "boolean"))
+	end
+	
+	function Kernel:GetLocalPackage()
+		local _, package = self._PackageManager:_GetLocalPackage(1)
+		return package
 	end
 
 	local expectclasstype = shared.expectclasstype
@@ -364,7 +355,7 @@ local Kernel = {} do
 	function Kernel:GetKernelClass(name)
 		return expectclasstype(self._KClassCollector:_GetModuleReturnValue(name), name)
 	end
-
+	
 	function Kernel:GetLocalClass(name)
 		return expectclasstype(self._PackageManager:GetLocalClass(name, 1), name)
 	end

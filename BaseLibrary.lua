@@ -70,6 +70,10 @@ local CLASS_TYPENAME = "__type"
 local CLASS_ID = "__id"
 local CLASS_MEMBER_ATTRIBUTES = "__member_attriutes"
 
+local CLASS_CONSTRUCTOR = "constructor"
+local CLASS_DESTRUCTOR = "Destroy"
+local CLASS_OBJECT_CREATOR = "new"
+
 local function isclasstyperaw(class, expectedType)
 	return class[CLASS_TYPENAME] == expectedType
 end
@@ -78,7 +82,7 @@ local function isclasstype(class, expectedType)
 	return istype(class, "table") and isclasstyperaw(class, expectedType)
 end
 
-local function isclass(class, expectedType)
+local function isclass(class)
 	return istype(class, "table") and istype(class[CLASS_TYPENAME], "string")
 end
 
@@ -540,7 +544,7 @@ local prepareClass, finalizeClass do
 	end
 
 	local instanceIndex = 0
-	local unusedDestructor = function()end
+	local emptyFunction = function()end
 
 	function finalizeClass(className, class)
 		if logClassBuildingProcess then
@@ -552,14 +556,15 @@ local prepareClass, finalizeClass do
 			rawset(class, "__index", class)
 		end
 
-		local thisDestructor = class.Destroy
+		local thisDestructor = class[CLASS_DESTRUCTOR]
 		if not thisDestructor then
-			class.Destroy = unusedDestructor
-			thisDestructor = unusedDestructor
+			class[CLASS_DESTRUCTOR] = emptyFunction
+			thisDestructor = emptyFunction
 		end
 
 		local destructors = {thisDestructor}
-
+		local constructors = {}
+		
 		-- collect inherited classes
 
 		local allInheritedClasses = {}
@@ -597,11 +602,17 @@ local prepareClass, finalizeClass do
 			end
 			
 			for memberName, member in next, rawget(baseClass, CLASS_OWN_MEMBERS) do
-				if memberName == "new" or string.sub(memberName, 1, 2) == "__" then
+				if  memberName == CLASS_OBJECT_CREATOR
+					or string.sub(memberName, 1, 2) == "__" then
 					continue
 				end
 
-				if memberName == "Destroy" then
+				if memberName == CLASS_CONSTRUCTOR then
+					table.insert(constructors, member)
+					continue
+				end
+
+				if memberName == CLASS_DESTRUCTOR then
 					table.insert(destructors, member)
 					continue
 				end
@@ -637,7 +648,7 @@ local prepareClass, finalizeClass do
 				rawset(class, memberName, member)
 			end
 		end
-
+		
 		-- destructor generation
 
 		if #destructors > 1 then
@@ -652,16 +663,29 @@ local prepareClass, finalizeClass do
 				end
 			end
 
-			function class:Destroy()
+			class[CLASS_DESTRUCTOR] = function(self)
 				for _, destructor in next, destructors do
 					destructor(self)
 				end
 			end
 		end
 
+		local constructor = class[CLASS_CONSTRUCTOR]
+		if not constructor then
+			class[CLASS_CONSTRUCTOR] = emptyFunction
+		end
+		
 		local debugModeSettings = kernelSettings.DebugMode
 
 		if debugModeEnabled then
+			
+			if constructor then
+				class[CLASS_CONSTRUCTOR] = function(...)
+					assert(isclass(...), "class expected")
+					assertf(constructor(...) == nil, "constructor of '%s' cannot return value", className)
+				end
+			end
+			
 			if debugModeSettings.AddTostringMetamethod then
 				local index = rawget(class, "__tostring")
 				if index == nil then
@@ -720,7 +744,7 @@ local prepareClass, finalizeClass do
 
 				end
 
-				if memberName == "new" then
+				if memberName == CLASS_OBJECT_CREATOR then
 					class[memberName] = function(...)
 						local instance = finalMemberFunction(...)
 						instance[CLASS_ID] = instanceIndex
@@ -733,14 +757,30 @@ local prepareClass, finalizeClass do
 			end
 		end
 		
-		table.freeze(class)
+		
+		local finalConstructor
+		local constructor = class[CLASS_CONSTRUCTOR]
+		
+		if constructor then
+			finalConstructor = function(...)
+				local object = setmetatable({}, class)
+				constructor(object, ...)
+				return object
+			end
+		else
+			finalConstructor = function()
+				return setmetatable({}, class)
+			end
+		end
+		
+		class[CLASS_OBJECT_CREATOR] = finalConstructor
 	end
 
 end
 
 
 local function convertToSingleton(class)
-	local constructor = class.new
+	local constructor = class[CLASS_OBJECT_CREATOR]
 
 	local instance
 	local function newConstructor(...)
@@ -752,7 +792,7 @@ local function convertToSingleton(class)
 		return instance
 	end
 
-	class.new = newConstructor
+	class[CLASS_OBJECT_CREATOR] = newConstructor
 end
 
 
@@ -760,23 +800,15 @@ end
 local function buildclass(className, class, ...)
 	prepareClass(className, class, ...)
 	finalizeClass(className, class)
+	table.freeze(class)
 	return class
 end
 
 local function buildsingleton(className, class, ...)
 	prepareClass(className, class, ...)
-	convertToSingleton(class)
 	finalizeClass(className, class)
-	return class
-end
-
-local function buildsingletonoverride(className, class, override, ...)
-	for i,v in next, override do
-		class[i] = v
-	end
-	prepareClass(className, class, ...)
 	convertToSingleton(class)
-	finalizeClass(className, class, override)
+	table.freeze(class)
 	return class
 end
 

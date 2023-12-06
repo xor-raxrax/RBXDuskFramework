@@ -2,10 +2,8 @@ local Collection = shared.kernel:GetKernelClass("Collection")
 
 local Map = {} do
 	
-	function Map.new()
-		local self = setmetatable(Collection.new(), Map)
-		
-		return self
+	function Map:constructor()
+		Collection.constructor(self)
 	end
 	
 	function Map:Get(key)

@@ -4,14 +4,12 @@ local expecttype = shared.expecttype
 
 local CCache = {} do
 	
-	function CCache.new(constructor, cleaner)
+	function CCache:constructor(constructor, cleaner)
 		expecttype(cleaner, "function")
 		
-		local self = setmetatable(Cache.new(constructor), CCache)
+		Cache.constructor(self, constructor)
 		
 		self._Cleaner = cleaner
-		
-		return self
 	end
 	
 	local CacheStore = Cache.Store

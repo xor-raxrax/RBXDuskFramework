@@ -2,10 +2,8 @@ local Collection = shared.kernel:GetKernelClass("Collection")
 
 local Stack = {} do
 	
-	function Stack.new()
-		local self = setmetatable(Collection.new(), Stack)
-		
-		return self
+	function Stack:constructor()
+		Collection.constructor(self)
 	end
 	
 	function Stack:Push(value)

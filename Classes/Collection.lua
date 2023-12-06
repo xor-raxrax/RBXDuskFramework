@@ -1,12 +1,8 @@
 local Collection = {} do
 	
-	function Collection.new()
-		local self = setmetatable({}, Collection)
-		
+	function Collection:constructor()
 		self.Items = {}
 		self.Size = 0
-		
-		return self
 	end
 	
 	function Collection:Destroy()

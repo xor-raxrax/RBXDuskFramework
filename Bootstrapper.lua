@@ -27,7 +27,7 @@ shared.kernelSettings = {
 
 	MethodAttributePrefix = "__attr_",
 	WarnOverrideOnMissingOverrideAttribute = true,
-
+	
 	PureVirtualMethodCallError = false,
 
 	ClassInstanceCleanupInformer = {
@@ -49,9 +49,9 @@ shared.DuskObject = {}
 
 local baseLibrary do
 	baseLibrary = require(kernelFolder.BaseLibrary)
-	
+
 	shared.baseLibrary = baseLibrary
-	
+
 	for k, v in next, baseLibrary do
 		shared[k] = v
 	end
