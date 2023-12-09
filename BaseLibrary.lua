@@ -69,6 +69,7 @@ local CLASS_BASE = "__base"
 local CLASS_TYPENAME = "__type"
 local CLASS_ID = "__id"
 local CLASS_MEMBER_ATTRIBUTES = "__member_attriutes"
+local CLASS_ATTRIBUTES = "__class_attriutes"
 
 local CLASS_CONSTRUCTOR = "constructor"
 local CLASS_DESTRUCTOR = "Destroy"
@@ -423,28 +424,31 @@ local prepareClass, finalizeClass do
 		return string.sub(name, 1, #methodAttributePrefix) == methodAttributePrefix
 	end
 
-	local function hasAttribute(class, memberName, attributeType)
-		local attributes = rawget(class, CLASS_MEMBER_ATTRIBUTES)
-		local memberAttributes = attributes[memberName]
-
-		if not memberAttributes then
-			return false
-		end
-
-		return memberAttributes[attributeType] ~= nil
-	end
-	
 	local classId = 0
-
-	local AttributeType = {
-		Virtual = "virtual",
-		PureVirtual = "purevirtual",
-	}
-
-	for enum, runtimeValue in next, AttributeType do
-		AttributeType[runtimeValue] = true
+	
+	local AttributeType do
+		
+		AttributeType = {
+			Virtual = "virtual",
+			PureVirtual = "purevirtual",
+			Singleton = "singleton",
+		}
+		
+		local toAdd = {}
+		
+		for name, value in next, AttributeType do
+			toAdd[value] = name
+		end
+		
+		for value, name in next, toAdd do
+			AttributeType[value] = name
+		end
 	end
 	
+	local function hasClassAttribute(class, name)
+		return rawget(class, CLASS_ATTRIBUTES)[name]
+	end
+
 	local function isMemberVirtual(class, memberName)
 		local attributes = rawget(class, CLASS_MEMBER_ATTRIBUTES)
 		local memberAttributes = attributes[memberName]
@@ -458,7 +462,7 @@ local prepareClass, finalizeClass do
 	end
 
 	local pureVirtualMethodCallError = kernelSettings.PureVirtualMethodCallError
-	
+
 	local function pureVirtualMethodHandler(self)
 		local name = debug.info(2, "ns")
 		local message = string.format("attempt to call pure virtual method %s:%s()", self.__type, name)
@@ -468,39 +472,59 @@ local prepareClass, finalizeClass do
 			warn(debug.traceback(message))
 		end
 	end
-	
+
 	function prepareClass(className, class, ...)
-		local attributes = {}
+		local memberAttributes = {}
+		local classAttributes = {}
 		local vtmembers = {}
+
+		local function handleMemberAttribute(memberOrValue, attributeType, memberName)
+			if not rawget(class, memberName) then
+				error(`attempt to add attribute '{attributeType}' to missing member '{className}::{memberName}'`)
+			end
+
+			local attributes = memberAttributes[memberName]
+			if not attributes then
+				attributes = {}
+				memberAttributes[memberName] = attributes
+			end
+
+			if attributes[attributeType] then
+				warn(`duplicate attribute {className}::{memberName}`, attributeType)
+			end
+
+			if attributeType == AttributeType.PureVirtual then
+				vtmembers[memberName] = pureVirtualMethodHandler
+			end
+
+			attributes[attributeType] = memberOrValue
+		end
+
+		local function handleClassAttribute(memberOrValue, attributeType)
+			classAttributes[attributeType] = memberOrValue
+		end
 
 		for name, memberOrValue in next, class do
 			if isAttribute(name) then
-				
-				local attributeType, memberName = string.match(name, "__attr_(%w+)_(.+)")
 
+				local isClassAttribute = false
+
+				local attributeType, memberName = string.match(name, "__attr_(%w+)_(.+)")
+				if not attributeType then
+					isClassAttribute = true
+					attributeType = string.match(name, "__attr_(%w+)")
+				end
+				
 				if not AttributeType[attributeType] then
 					error(`invalid attribute type '{attributeType}' of '{className}::{memberName}'`)
 				end
 
-				if not rawget(class, memberName) then
-					error(`attempt to add attribute '{attributeType}' to missing member '{className}::{memberName}'`)
-				end
-				
-				local memberAttributes = attributes[memberName]
-				if not memberAttributes then
-					memberAttributes = {}
-					attributes[memberName] = memberAttributes
+				if isClassAttribute then
+					handleClassAttribute(memberOrValue, attributeType)
+				else
+					handleMemberAttribute(memberOrValue, attributeType, memberName)
 				end
 
-				if memberAttributes[attributeType] then
-					warn(`duplicate attribute {className}::{memberName}`, attributeType)
-				end
-				
-				if attributeType == AttributeType.PureVirtual then
-					vtmembers[memberName] = pureVirtualMethodHandler
-				end
-				
-				memberAttributes[attributeType] = memberOrValue
 				rawset(class, name, nil)
 			else
 				vtmembers[name] = memberOrValue
@@ -509,27 +533,29 @@ local prepareClass, finalizeClass do
 
 		rawset(class, CLASS_OWN_MEMBERS, vtmembers)
 		rawset(class, CLASS_VTMEMBER_OVERRIDES, {})
-		rawset(class, CLASS_BASE, {})
 		rawset(class, CLASS_TYPENAME, className)
 		rawset(class, CLASS_ID, classId)
-		rawset(class, CLASS_MEMBER_ATTRIBUTES, attributes)
+		rawset(class, CLASS_MEMBER_ATTRIBUTES, memberAttributes)
+		rawset(class, CLASS_ATTRIBUTES, classAttributes)
 
 		classId += 1
 
-		local baseClassesToAdd = {...}
 		local baseClasses = rawget(class, CLASS_BASE)
+		
+		if not baseClasses then
+			baseClasses = {...}
+			rawset(class, CLASS_BASE, baseClasses)
+			
+			for _, baseClass in next, baseClasses do
 
-		for _, baseClass in next, baseClassesToAdd do
+				if warnExplicitDuskObjectInheritance and baseClass == DuskObject then
+					makeWarn(className, "explicit DuskObject inheritance")
+				end
 
-			if warnExplicitDuskObjectInheritance and baseClass == DuskObject then
-				makeWarn(className, "explicit DuskObject inheritance")
+				if baseClass == class then
+					error("recursive inheritance is not allowed")
+				end
 			end
-
-			if baseClass == class then
-				error("recursive inheritance is not allowed")
-			end
-
-			table.insert(baseClasses, baseClass)
 		end
 
 		return class
@@ -564,7 +590,7 @@ local prepareClass, finalizeClass do
 
 		local destructors = {thisDestructor}
 		local constructors = {}
-		
+
 		-- collect inherited classes
 
 		local allInheritedClasses = {}
@@ -591,16 +617,16 @@ local prepareClass, finalizeClass do
 		if logClassBuildingProcess then
 			print(className, "inheritance:")
 		end
-		
+
 		local inheritedVirtualMethods = {}
-		
+
 		-- move inherited methods to vtable and collect destructors
 		for _, baseClass in next, allInheritedClasses do
-			
+
 			if logClassBuildingProcess then
 				print("\t inheriting", rawget(baseClass, CLASS_TYPENAME))
 			end
-			
+
 			for memberName, member in next, rawget(baseClass, CLASS_OWN_MEMBERS) do
 				if  memberName == CLASS_OBJECT_CREATOR
 					or string.sub(memberName, 1, 2) == "__" then
@@ -621,7 +647,7 @@ local prepareClass, finalizeClass do
 				if isVirtual then
 					inheritedVirtualMethods[memberName] = true
 				end
-				
+
 				if class[memberName] and not inheritedVirtualMethods[memberName] then
 					error(`cannot override non-virtual method '{memberName}'`)
 				end
@@ -637,9 +663,9 @@ local prepareClass, finalizeClass do
 
 				rawset(class, memberName, member)
 			end
-			
+
 		end
-		
+
 		for memberName, member in next, rawget(class, CLASS_OWN_MEMBERS) do
 			if inheritedVirtualMethods[memberName] then
 				if logClassBuildingProcess then
@@ -648,7 +674,7 @@ local prepareClass, finalizeClass do
 				rawset(class, memberName, member)
 			end
 		end
-		
+
 		-- destructor generation
 
 		if #destructors > 1 then
@@ -674,18 +700,18 @@ local prepareClass, finalizeClass do
 		if not constructor then
 			class[CLASS_CONSTRUCTOR] = emptyFunction
 		end
-		
+
 		local debugModeSettings = kernelSettings.DebugMode
 
 		if debugModeEnabled then
-			
+
 			if constructor then
 				class[CLASS_CONSTRUCTOR] = function(...)
 					assert(isclass(...), "class expected")
 					assertf(constructor(...) == nil, "constructor of '%s' cannot return value", className)
 				end
 			end
-			
+
 			if debugModeSettings.AddTostringMetamethod then
 				local index = rawget(class, "__tostring")
 				if index == nil then
@@ -756,11 +782,11 @@ local prepareClass, finalizeClass do
 				end
 			end
 		end
-		
-		
+
+
 		local finalConstructor
 		local constructor = class[CLASS_CONSTRUCTOR]
-		
+
 		if constructor then
 			finalConstructor = function(...)
 				local object = setmetatable({}, class)
@@ -772,42 +798,28 @@ local prepareClass, finalizeClass do
 				return setmetatable({}, class)
 			end
 		end
-		
+
+		if hasClassAttribute(class, AttributeType.Singleton) then
+			local instance
+			local constructor = finalConstructor
+			finalConstructor = function(...)
+				if instance then
+					return instance
+				end
+
+				instance = constructor(...)
+				return instance
+			end
+		end
+
 		class[CLASS_OBJECT_CREATOR] = finalConstructor
 	end
 
 end
 
-
-local function convertToSingleton(class)
-	local constructor = class[CLASS_OBJECT_CREATOR]
-
-	local instance
-	local function newConstructor(...)
-		if instance then
-			return instance
-		end
-
-		instance = constructor(...)
-		return instance
-	end
-
-	class[CLASS_OBJECT_CREATOR] = newConstructor
-end
-
-
-
 local function buildclass(className, class, ...)
 	prepareClass(className, class, ...)
 	finalizeClass(className, class)
-	table.freeze(class)
-	return class
-end
-
-local function buildsingleton(className, class, ...)
-	prepareClass(className, class, ...)
-	finalizeClass(className, class)
-	convertToSingleton(class)
 	table.freeze(class)
 	return class
 end
@@ -872,6 +884,5 @@ library.isclasstype = isclasstype
 library.isclass = isclass
 
 library.buildclass = buildclass
-library.buildsingleton = buildsingleton
 
 return library

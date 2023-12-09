@@ -2,6 +2,8 @@ local Collection = shared.kernel:GetKernelClass("Collection")
 
 local Stack = {} do
 	
+	Stack.__base = {Collection}
+	
 	function Stack:constructor()
 		Collection.constructor(self)
 	end
@@ -23,7 +25,6 @@ local Stack = {} do
 		return topValue
 	end
 	
-	shared.buildclass("Stack", Stack, Collection)
 end
 
 return Stack

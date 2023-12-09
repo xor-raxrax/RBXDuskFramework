@@ -66,7 +66,6 @@ local Collection = {} do
 		return table.remove(self.Items, pos)
 	end
 	
-	shared.buildclass("Collection", Collection)
 end
 
 return Collection

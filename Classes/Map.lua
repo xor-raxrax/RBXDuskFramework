@@ -2,6 +2,8 @@ local Collection = shared.kernel:GetKernelClass("Collection")
 
 local Map = {} do
 	
+	Map.__base = {Collection}
+	
 	function Map:constructor()
 		Collection.constructor(self)
 	end
@@ -40,7 +42,6 @@ local Map = {} do
 		self:Set(key, nil)
 	end
 	
-	shared.buildclass("Map", Map, Collection)
 end
 
 return Map

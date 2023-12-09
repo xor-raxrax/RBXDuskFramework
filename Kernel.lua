@@ -20,6 +20,17 @@ local Module = {} do
 		return result
 	end
 
+	function Module:GetReturnValueAsClass(name)
+		local class = self:GetReturnValue()
+		if not class then return end
+
+		if not class.__type then
+			shared.buildclass(name, class)
+		end
+
+		return class
+	end
+	
 	buildclass("Module", Module)
 end
 
@@ -80,6 +91,13 @@ local ModuleCollector = {} do
 		end
 	end
 
+	function ModuleCollector:_GetModuleReturnValueAsClass(name, noThrow)
+		local module = self:_GetModule(name, noThrow)
+		if module then
+			return module:GetReturnValueAsClass(name)
+		end
+	end
+
 	buildclass("ModuleCollector", ModuleCollector)
 end
 
@@ -87,7 +105,7 @@ local Package = {} do
 
 	function Package:constructor(manager, rootFolder)
 		ModuleCollector.constructor(self, rootFolder, "class")
-
+		
 		self.Name = rootFolder.Name
 		self._ModuleToName = {}
 		self._PackageManager = manager
@@ -95,8 +113,8 @@ local Package = {} do
 		self._EnumsModule = nil
 	end
 
-	function Package:GetClass(name)
-		return self:_GetModuleReturnValue(name)
+	function Package:GetClass(name, noThrow)
+		return self:_GetModuleReturnValueAsClass(name, noThrow)
 	end
 
 	local initializeEnums do
@@ -210,9 +228,9 @@ local PackageManager = {} do
 		end
 
 		for _, package in next, self.Packages do
-			local module = package:_GetModule(name, true)
-			if module then
-				return module:GetReturnValue()
+			local class = package:GetClass(name, true)
+			if class then
+				return class
 			end
 		end
 
@@ -231,10 +249,9 @@ local PackageManager = {} do
 			return
 		end
 
-		local module = packageOrTrace:_GetModule(name, noThrow)
-
-		if module then
-			return module:GetReturnValue()
+		local class = packageOrTrace:GetClass(name, noThrow)
+		if class then
+			return class
 		end
 	end
 
@@ -322,6 +339,8 @@ end
 
 local Kernel = {} do
 
+	Kernel.__attr_singleton = true
+	
 	function Kernel:constructor()
 		local kernelFolder = script.Parent
 		self._KClassCollector = ModuleCollector.new(kernelFolder[kernelSettings.ClassesFolderName], "class")
@@ -353,7 +372,7 @@ local Kernel = {} do
 	end
 
 	function Kernel:GetKernelClass(name)
-		return expectclasstype(self._KClassCollector:_GetModuleReturnValue(name), name)
+		return expectclasstype(self._KClassCollector:_GetModuleReturnValueAsClass(name), name)
 	end
 	
 	function Kernel:GetLocalClass(name)
@@ -376,8 +395,8 @@ local Kernel = {} do
 	function Kernel:GetLocalEnum(name)
 		return self._PackageManager:GetLocalEnum(name, 1)
 	end
-
-	shared.buildsingleton("Kernel", Kernel)
+	
+	shared.buildclass("Kernel", Kernel)
 end
 
 kernel = Kernel.new()

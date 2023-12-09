@@ -4,12 +4,12 @@ local expecttype = shared.expecttype
 
 local CCache = {} do
 	
+	CCache.__base = {Cache}
+	
 	function CCache:constructor(constructor, cleaner)
-		expecttype(cleaner, "function")
-		
 		Cache.constructor(self, constructor)
 		
-		self._Cleaner = cleaner
+		self._Cleaner = expecttype(cleaner, "function")
 	end
 	
 	local CacheStore = Cache.Store
@@ -18,7 +18,6 @@ local CCache = {} do
 		self._Cleaner(item)
 	end
 	
-	shared.buildclass("CCache", CCache, Cache)
 end
 
 return CCache

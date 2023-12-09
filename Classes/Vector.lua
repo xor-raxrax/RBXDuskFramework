@@ -2,6 +2,8 @@ local Collection = shared.kernel:GetKernelClass("Collection")
 
 local Vector = {} do
 	
+	Vector.__base = {Collection}
+	
 	function Vector:constructor()
 		Collection.constructor(self)
 	end
@@ -26,7 +28,6 @@ local Vector = {} do
 		return self.Items[self.Size]
 	end
 	
-	shared.buildclass("Vector", Vector, Collection)
 end
 
 return Vector

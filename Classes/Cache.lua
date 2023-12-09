@@ -106,7 +106,6 @@ local Cache = {} do
 		return expansionSize
 	end
 	
-	shared.buildclass("Cache", Cache)
 end
 
 return Cache
