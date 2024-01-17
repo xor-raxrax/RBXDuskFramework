@@ -1,8 +1,8 @@
-local Collection = shared.kernel:GetKernelClass("Collection")
+local Collection = shared.kernel:GetLocalClass("Collection")
 
 local Vector = {} do
 	
-	Vector.__base = {Collection}
+	Vector.__base = { Collection }
 	
 	function Vector:constructor()
 		Collection.constructor(self)

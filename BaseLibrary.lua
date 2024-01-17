@@ -401,52 +401,132 @@ end
 -- oop
 
 
-local prepareClass, finalizeClass do
+local AttributeType do
 
-	local DuskObject = shared.DuskObject
+	AttributeType = {
+		Virtual = "virtual",
+		PureVirtual = "purevirtual",
+		Singleton = "singleton",
+		NoFreeze = "nofreeze",
+	}
+
+	local toAdd = {}
+
+	for name, value in next, AttributeType do
+		toAdd[value] = name
+	end
+
+	for value, name in next, toAdd do
+		AttributeType[value] = name
+	end
+end
+
+local function hasClassAttribute(class, name)
+	return rawget(class, CLASS_ATTRIBUTES)[name]
+end
+
+local DuskObject = {} do
+
+	function DuskObject:IsA(classOrName)
+		if type(classOrName) == "string" then
+			return self.__type == classOrName
+		end
+
+		return self.__index == classOrName
+	end
+
+	local function recursiveBaseTableClassSearch(t, name)
+		for _, class in next, t do
+			if class.__type == name then
+				return class
+			else
+				local foundClass = recursiveBaseTableClassSearch(class.__base, name)
+				if foundClass then
+					return foundClass
+				end
+			end
+		end
+	end
+
+	local expectclass = shared.expectclass
+
+	function DuskObject.IsDerivedOf(what, class)
+		local vtype = type(class)
+
+		if vtype == "string" then
+			return not not recursiveBaseTableClassSearch(what.__base, class)
+		end
+
+		expectclass(class)
+
+		return not not recursiveBaseTableClassSearch(what.__base, class.__type)
+	end
+
+	function DuskObject.IsDerivedOfOrSameClass(what, class)
+		expectclass(class)
+
+		return what.__index == class.__index
+			or DuskObject.IsDerivedOf(what, class)
+	end
+
+	local kernelSettings = shared.kernelSettings
+
+	if kernelSettings.ClassInstanceCleanupInformer.Enabled then
+
+		local useError = kernelSettings.ClassInstanceCleanupInformer.UseError
+
+		local informAliveThread = kernelSettings.InformAliveThread
+		local informAliveRBXScriptConnection = kernelSettings.InformAliveRBXScriptConnection
+		local informRBXInstance = kernelSettings.InformRBXInstance
+
+		local function inform(fieldSymbol, value, message)
+			local formatted = string.format("%s = %s (%s)", tostring(fieldSymbol), tostring(value), message)
+			if useError then
+				error(formatted, 4)
+			else
+				warn(debug.traceback(formatted, 4))
+			end
+		end
+
+		local function validate(name, value)
+			local vtype = typeof(value)
+
+			if informAliveThread and vtype == "thread" then
+				if coroutine.status(value) ~= "dead" then
+					inform(name, value, "alive thread; possible dangling thread")
+				end
+
+			elseif informAliveRBXScriptConnection and vtype == "RBXScriptConnection" then
+				if not value.Connected then
+					inform(name, value, "alive RBXScriptConnection; possible dangling connection")
+				end
+
+			elseif informRBXInstance and vtype == "Instance" then
+				inform(name, value, "Intance reference; possible dangling Instance; non-gced reference from lua or any alive RBXScriptConnection associated with this instance will prevent RBXIntance cleanup (only Instance:Destroy() disconnects all alive RBXScriptConnections)")
+
+			end
+		end
+
+		function DuskObject:Destroy()
+			local classType = self.__type .. "."
+			for field, item in next, self do
+				validate(classType .. "<field>", field)
+				validate(classType .. field, item)
+			end
+		end
+
+	end
+
+end
+
+local classBuilder do
 
 	local alwaysInheritDuskObject = kernelSettings.AlwaysInheritDuskObject
-
-	local warnExplicitDuskObjectInheritance = kernelSettings.WarnExplicitDuskObjectInheritance
-	local warnImplicitDuskObjectInheritance = kernelSettings.WarnImplicitDuskObjectInheritance
-
-
 	local logClassBuildingProcess = kernelSettings.LogClassBuildingProcess
 
 	local function makeWarn(className, message)
 		local formatted = string.format("class '%s' %s", className, message)
 		warn(debug.traceback(formatted, 3))
-	end
-
-	local methodAttributePrefix = kernelSettings.MethodAttributePrefix
-
-	local function isAttribute(name)
-		return string.sub(name, 1, #methodAttributePrefix) == methodAttributePrefix
-	end
-
-	local classId = 0
-	
-	local AttributeType do
-		
-		AttributeType = {
-			Virtual = "virtual",
-			PureVirtual = "purevirtual",
-			Singleton = "singleton",
-		}
-		
-		local toAdd = {}
-		
-		for name, value in next, AttributeType do
-			toAdd[value] = name
-		end
-		
-		for value, name in next, toAdd do
-			AttributeType[value] = name
-		end
-	end
-	
-	local function hasClassAttribute(class, name)
-		return rawget(class, CLASS_ATTRIBUTES)[name]
 	end
 
 	local function isMemberVirtual(class, memberName)
@@ -473,354 +553,507 @@ local prepareClass, finalizeClass do
 		end
 	end
 
-	function prepareClass(className, class, ...)
-		local memberAttributes = {}
-		local classAttributes = {}
-		local vtmembers = {}
-
-		local function handleMemberAttribute(memberOrValue, attributeType, memberName)
-			if not rawget(class, memberName) then
-				error(`attempt to add attribute '{attributeType}' to missing member '{className}::{memberName}'`)
-			end
-
-			local attributes = memberAttributes[memberName]
-			if not attributes then
-				attributes = {}
-				memberAttributes[memberName] = attributes
-			end
-
-			if attributes[attributeType] then
-				warn(`duplicate attribute {className}::{memberName}`, attributeType)
-			end
-
-			if attributeType == AttributeType.PureVirtual then
-				vtmembers[memberName] = pureVirtualMethodHandler
-			end
-
-			attributes[attributeType] = memberOrValue
-		end
-
-		local function handleClassAttribute(memberOrValue, attributeType)
-			classAttributes[attributeType] = memberOrValue
-		end
-
-		for name, memberOrValue in next, class do
-			if isAttribute(name) then
-
-				local isClassAttribute = false
-
-				local attributeType, memberName = string.match(name, "__attr_(%w+)_(.+)")
-				if not attributeType then
-					isClassAttribute = true
-					attributeType = string.match(name, "__attr_(%w+)")
-				end
-				
-				if not AttributeType[attributeType] then
-					error(`invalid attribute type '{attributeType}' of '{className}::{memberName}'`)
-				end
-
-				if isClassAttribute then
-					handleClassAttribute(memberOrValue, attributeType)
-				else
-					handleMemberAttribute(memberOrValue, attributeType, memberName)
-				end
-
-				rawset(class, name, nil)
-			else
-				vtmembers[name] = memberOrValue
-			end
-		end
-
-		rawset(class, CLASS_OWN_MEMBERS, vtmembers)
-		rawset(class, CLASS_VTMEMBER_OVERRIDES, {})
-		rawset(class, CLASS_TYPENAME, className)
-		rawset(class, CLASS_ID, classId)
-		rawset(class, CLASS_MEMBER_ATTRIBUTES, memberAttributes)
-		rawset(class, CLASS_ATTRIBUTES, classAttributes)
-
-		classId += 1
-
-		local baseClasses = rawget(class, CLASS_BASE)
-		
-		if not baseClasses then
-			baseClasses = {...}
-			rawset(class, CLASS_BASE, baseClasses)
-			
-			for _, baseClass in next, baseClasses do
-
-				if warnExplicitDuskObjectInheritance and baseClass == DuskObject then
-					makeWarn(className, "explicit DuskObject inheritance")
-				end
-
-				if baseClass == class then
-					error("recursive inheritance is not allowed")
-				end
-			end
-		end
-
-		return class
+	local attributePrefix = "__attr_"
+	local function isAttribute(name)
+		return string.sub(name, 1, #attributePrefix) == attributePrefix
 	end
 
-	local function collectInherited(result, currentClass)
-		for _, baseClass in next, currentClass[CLASS_BASE] do
-			if table.find(result, baseClass) then continue end
-			collectInherited(result, baseClass)
-			table.insert(result, baseClass)
-		end
-	end
+	local classId = 0
 
 	local instanceIndex = 0
 	local emptyFunction = function()end
 
-	function finalizeClass(className, class)
-		if logClassBuildingProcess then
-			print(className, "finalizing")
+	local ClassBuilder = {} do
+		ClassBuilder.__index = ClassBuilder
+
+		function ClassBuilder.new()
+			local self = setmetatable({}, ClassBuilder)
+
+			self.Class = nil
+			self.ClassName = nil
+
+			self.MemberAttributes = nil
+			self.ClassAttributes = nil
+			self.VtMembers = nil
+
+			return self
 		end
 
-		local index = rawget(class, "__index")
-		if index == nil or type(index) == "table" and index ~= class then
-			rawset(class, "__index", class)
-		end
+		function ClassBuilder.IsMemberVirtual(class, memberName)
+			local attributes = rawget(class, CLASS_MEMBER_ATTRIBUTES)
+			local memberAttributes = attributes[memberName]
 
-		local thisDestructor = class[CLASS_DESTRUCTOR]
-		if not thisDestructor then
-			class[CLASS_DESTRUCTOR] = emptyFunction
-			thisDestructor = emptyFunction
-		end
-
-		local destructors = {thisDestructor}
-		local constructors = {}
-
-		-- collect inherited classes
-
-		local allInheritedClasses = {}
-		collectInherited(allInheritedClasses, class)
-
-		if alwaysInheritDuskObject and class ~= DuskObject then
-			local hasDuskObject = false
-
-			for _, baseClass in next, allInheritedClasses do
-				if baseClass == DuskObject then
-					hasDuskObject = true
-					break
-				end
+			if not memberAttributes then
+				return false
 			end
 
-			if not hasDuskObject then
-				table.insert(allInheritedClasses, DuskObject)
-				if warnImplicitDuskObjectInheritance then
-					makeWarn(className, "implicit DuskObject inheritance")
-				end
+			return memberAttributes[AttributeType.Virtual]
+		end
+
+		function ClassBuilder.HasClassAttribute(class, name)
+			return rawget(class, CLASS_ATTRIBUTES)[name]
+		end
+
+		function ClassBuilder:SetIndex()
+			local class = self.Class
+			local index = rawget(class, "__index")
+			if index == nil or type(index) == "table" and index ~= class then
+				rawset(class, "__index", class)
 			end
 		end
 
-		if logClassBuildingProcess then
-			print(className, "inheritance:")
+		function ClassBuilder:SetThisDestructor()
+			local class = self.Class
+			local thisDestructor = rawget(class, CLASS_DESTRUCTOR)
+			if not thisDestructor then
+				rawset(class, CLASS_DESTRUCTOR, emptyFunction)
+				thisDestructor = emptyFunction
+			end
+			self.ThisDestructor = thisDestructor
 		end
 
-		local inheritedVirtualMethods = {}
-
-		-- move inherited methods to vtable and collect destructors
-		for _, baseClass in next, allInheritedClasses do
-
-			if logClassBuildingProcess then
-				print("\t inheriting", rawget(baseClass, CLASS_TYPENAME))
+		local function collectInherited(result, currentClass)
+			for _, baseClass in next, currentClass[CLASS_BASE] do
+				if table.find(result, baseClass) then continue end
+				collectInherited(result, baseClass)
+				table.insert(result, baseClass)
 			end
+		end
 
-			for memberName, member in next, rawget(baseClass, CLASS_OWN_MEMBERS) do
-				if  memberName == CLASS_OBJECT_CREATOR
-					or string.sub(memberName, 1, 2) == "__" then
-					continue
-				end
+		function ClassBuilder:CollectInheritedClasses()
+			local class = self.Class
+			local allInheritedClasses = {}
+			collectInherited(allInheritedClasses, class)
 
-				if memberName == CLASS_CONSTRUCTOR then
-					table.insert(constructors, member)
-					continue
-				end
+			if alwaysInheritDuskObject and class ~= DuskObject then
+				local hasDuskObject = false
 
-				if memberName == CLASS_DESTRUCTOR then
-					table.insert(destructors, member)
-					continue
-				end
-
-				local isVirtual = isMemberVirtual(baseClass, memberName)
-				if isVirtual then
-					inheritedVirtualMethods[memberName] = true
-				end
-
-				if class[memberName] and not inheritedVirtualMethods[memberName] then
-					error(`cannot override non-virtual method '{memberName}'`)
-				end
-
-				if logClassBuildingProcess then
-					local name = debug.info(member, "n")
-					if memberName ~= name then
-						warn(`\t added {memberName} ({name})`)
-					else
-						warn("\t added", memberName)
+				for _, baseClass in next, allInheritedClasses do
+					if baseClass == DuskObject then
+						hasDuskObject = true
+						break
 					end
 				end
 
-				rawset(class, memberName, member)
-			end
-
-		end
-
-		for memberName, member in next, rawget(class, CLASS_OWN_MEMBERS) do
-			if inheritedVirtualMethods[memberName] then
-				if logClassBuildingProcess then
-					warn(`\t overriding {memberName}`)
+				if not hasDuskObject then
+					table.insert(allInheritedClasses, DuskObject)
 				end
-				rawset(class, memberName, member)
 			end
+
+			return allInheritedClasses
 		end
 
-		-- destructor generation
+		function ClassBuilder:ProcessInheritance()
+			local class = self.Class
+			local allInheritedClasses = self:CollectInheritedClasses()
 
-		if #destructors > 1 then
-
-			-- destructor call order is reversed
-			-- derived -> base
+			local inheritedVirtualMethods = {}
 
 			if logClassBuildingProcess then
-				print(className, "destructors:")
-				for _, destructor in next, destructors do
-					warn("\t", debug.info(destructor, "sn"))
-				end
+				print(self.ClassName, "inheritance:")
 			end
 
-			class[CLASS_DESTRUCTOR] = function(self)
-				for _, destructor in next, destructors do
-					destructor(self)
+			-- move inherited methods to vtable and collect destructors
+			for _, baseClass in next, allInheritedClasses do
+
+				if logClassBuildingProcess then
+					print("\t inheriting", rawget(baseClass, CLASS_TYPENAME))
+				end
+
+				for memberName, member in next, rawget(baseClass, CLASS_OWN_MEMBERS) do
+					if memberName == CLASS_OBJECT_CREATOR
+						or memberName == CLASS_CONSTRUCTOR
+						or string.sub(memberName, 1, 2) == "__" then
+						continue
+					end
+
+					if memberName == CLASS_DESTRUCTOR then
+						table.insert(self.Destructors, member)
+						continue
+					end
+
+					if self.IsMemberVirtual(baseClass, memberName) then
+						inheritedVirtualMethods[memberName] = true
+					end
+
+					if class[memberName] and not inheritedVirtualMethods[memberName] then
+						print("inheritedVirtualMethods", inheritedVirtualMethods)
+						print("class", class)
+						print("baseClass", baseClass)
+						error(`cannot override non-virtual method '{memberName}'`)
+					end
+
+					if logClassBuildingProcess then
+						local name = debug.info(member, "n")
+						if memberName ~= name then
+							warn(`\t added {memberName} ({name})`)
+						else
+							warn("\t added", memberName)
+						end
+					end
+
+					rawset(class, memberName, member)
+				end
+
+			end
+
+			for memberName, member in next, rawget(class, CLASS_OWN_MEMBERS) do
+				if inheritedVirtualMethods[memberName] then
+					if logClassBuildingProcess then
+						warn(`\t overriding {memberName}`)
+					end
+					rawset(class, memberName, member)
 				end
 			end
 		end
 
-		local constructor = class[CLASS_CONSTRUCTOR]
-		if not constructor then
-			class[CLASS_CONSTRUCTOR] = emptyFunction
-		end
+		function ClassBuilder:HandleDebugAndInitialObjectCreators()
+			local class = self.Class
+			local className = self.ClassName
 
-		local debugModeSettings = kernelSettings.DebugMode
+			local destructors = {self.ThisDestructor}
 
-		if debugModeEnabled then
-
-			if constructor then
-				class[CLASS_CONSTRUCTOR] = function(...)
-					assert(isclass(...), "class expected")
-					assertf(constructor(...) == nil, "constructor of '%s' cannot return value", className)
-				end
+			local constructor = class[CLASS_CONSTRUCTOR]
+			if not constructor then
+				class[CLASS_CONSTRUCTOR] = emptyFunction
 			end
 
-			if debugModeSettings.AddTostringMetamethod then
-				local index = rawget(class, "__tostring")
-				if index == nil then
-					rawset(class, "__tostring", function(self)
-						return tostring(self[CLASS_ID]) .. "_" .. self[CLASS_TYPENAME]
-					end)
+			local debugModeSettings = kernelSettings.DebugMode
+
+			if debugModeEnabled then
+
+				if constructor then
+					class[CLASS_CONSTRUCTOR] = function(...)
+						assert(isclass(...), "class expected")
+						assertf(constructor(...) == nil, "constructor of '%s' cannot return value", className)
+					end
 				end
-			end
 
-			for memberName, memberFunction in next, class do
-				if type(memberFunction) ~= "function" then continue end
-				if string.sub(memberName, 1, 2) == "__" then continue end
+				if debugModeSettings.AddTostringMetamethod then
+					local index = rawget(class, "__tostring")
+					if index == nil then
+						rawset(class, "__tostring", function(self)
+							return tostring(self[CLASS_ID]) .. "_" .. self[CLASS_TYPENAME]
+						end)
+					end
+				end
 
-				local finalMemberFunction = memberFunction
+				for memberName, memberFunction in next, class do
+					if type(memberFunction) ~= "function" then continue end
+					if string.sub(memberName, 1, 2) == "__" then continue end
 
-				if debugModeSettings.LogCalls then
-					local ignoreSpecialMethodCallLog = debugModeSettings.IgnoreSpecialMethodCallLog
+					local finalMemberFunction = memberFunction
 
-					if not ignoreSpecialMethodCallLog
-						or (ignoreSpecialMethodCallLog and not table.find(debugModeSettings.SpecialMethodNames, memberName)) then
+					if debugModeSettings.LogCalls then
+						local ignoreSpecialMethodCallLog = debugModeSettings.IgnoreSpecialMethodCallLog
 
-						local lastFunction = finalMemberFunction
-						finalMemberFunction = function(...)
-							local arguments = ""
+						if not ignoreSpecialMethodCallLog
+							or (ignoreSpecialMethodCallLog and not table.find(debugModeSettings.SpecialMethodNames, memberName)) then
 
-							local isMethod = false
+							local lastFunction = finalMemberFunction
+							finalMemberFunction = function(...)
+								local arguments = ""
 
-							local first = ...
-							if type(first) == "table" and first[CLASS_TYPENAME] == className then
-								isMethod = true
-							end
+								local isMethod = false
 
-							local argSize = select("#", ...)
-							for i = isMethod and 2 or 1, argSize do
-								local separator = ""
-
-								if i < argSize then
-									separator ..= ", "
+								local first = ...
+								if type(first) == "table" and first[CLASS_TYPENAME] == className then
+									isMethod = true
 								end
 
-								arguments ..= tostring(select(i, ...)) .. separator
+								local argSize = select("#", ...)
+								for i = isMethod and 2 or 1, argSize do
+									local separator = ""
+
+									if i < argSize then
+										separator ..= ", "
+									end
+
+									arguments ..= tostring(select(i, ...)) .. separator
+								end
+
+								warnf("%s%s%s%s(%s)",
+									string.rep("  ", getcallstacksize()),
+									isMethod and tostring(first) or className,
+									isMethod and ":" or ".",
+									memberName,
+									arguments
+								)
+
+								return lastFunction(...)
 							end
 
-							warnf("%s%s%s%s(%s)",
-								string.rep("  ", getcallstacksize()),
-								isMethod and tostring(first) or className,
-								isMethod and ":" or ".",
-								memberName,
-								arguments
-							)
-
-							return lastFunction(...)
 						end
 
 					end
 
+					if memberName == CLASS_OBJECT_CREATOR then
+						class[memberName] = function(...)
+							local instance = finalMemberFunction(...)
+							instance[CLASS_ID] = instanceIndex
+							instanceIndex += 1
+							return instance
+						end
+					else
+						class[memberName] = finalMemberFunction
+					end
+				end
+			end
+
+
+			local finalConstructor
+			local constructor = class[CLASS_CONSTRUCTOR]
+
+			if constructor then
+				self.FinalConstructor = function(...)
+					local object = setmetatable({}, class)
+					constructor(object, ...)
+					return object
+				end
+			else
+				self.FinalConstructor = function()
+					return setmetatable({}, class)
+				end
+			end
+		end
+
+		function ClassBuilder:InitAndValidateInheritance(...)
+			local class = self.Class
+			local baseClasses = rawget(class, CLASS_BASE)
+
+			if not baseClasses then
+				baseClasses = {...}
+				rawset(class, CLASS_BASE, baseClasses)
+
+				for _, baseClass in next, baseClasses do
+					if baseClass == class then
+						error("recursive inheritance is not allowed")
+					end
+				end
+			end
+		end
+
+		function ClassBuilder:BuildDestructor()
+			local destructors = self.Destructors
+			if #destructors > 1 then
+
+				-- destructor call order is reversed
+				-- derived -> base
+
+				if logClassBuildingProcess then
+					print(self.ClassName, "destructors:")
+					for _, destructor in next, destructors do
+						warn("\t", debug.info(destructor, "sn"))
+					end
 				end
 
-				if memberName == CLASS_OBJECT_CREATOR then
-					class[memberName] = function(...)
-						local instance = finalMemberFunction(...)
-						instance[CLASS_ID] = instanceIndex
-						instanceIndex += 1
-						return instance
+				rawset(self.Class, CLASS_DESTRUCTOR, function(self)
+					for _, destructor in next, destructors do
+						destructor(self)
+					end
+				end)
+			end
+		end
+
+		local attributePrefix = "__attr_"
+		local function parseAttributeString(attributeString)
+			local parts = {}
+			local partStartPos, pos = 1, 1
+
+			attributeString = string.sub(attributeString, #attributePrefix + 1)
+
+			local isNewPart = true
+			while pos <= #attributeString do
+				local char = string.sub(attributeString, pos, pos)
+
+				if char == "_" then
+					if isNewPart then
+						table.insert(parts, string.sub(attributeString, partStartPos, pos - 1))
+						partStartPos = pos + 1
+						isNewPart = false
 					end
 				else
-					class[memberName] = finalMemberFunction
+					isNewPart = true
+				end
+
+				pos += 1
+			end
+
+			-- Add the last part after the last underscore (or the whole string if no underscore is found)
+			table.insert(parts, string.sub(attributeString, partStartPos))
+
+			return parts
+		end
+
+		local AttributeApplyType = {
+			Class = 1,
+			Member = 2,
+		}
+
+		local attributeInfo do
+
+			local pureVirtualHandler = function(builder, memberName)
+				builder.VtMembers[memberName] = pureVirtualMethodHandler
+				builder:HandleAttribute({AttributeType.Virtual, memberName}, memberName)
+			end
+
+			attributeInfo = {
+
+				[AttributeType.Virtual] = {
+					ApplyType = AttributeApplyType.Member,
+					Handler = nil,
+				},
+
+				[AttributeType.PureVirtual] = {
+					ApplyType = AttributeApplyType.Member,
+					Handler = pureVirtualHandler,
+				},
+
+				[AttributeType.Singleton] = {
+					ApplyType = AttributeApplyType.Class,
+					Handler = nil,
+				},
+
+				[AttributeType.NoFreeze] = {
+					ApplyType = AttributeApplyType.Class,
+					Handler = nil,
+				},
+
+			}
+
+		end
+
+		function ClassBuilder:HandleAttribute(attributeArgs, value)
+			local attributeType = attributeArgs[1]
+
+			local info = attributeInfo[attributeType]
+
+			if not info then
+				local memberName = attributeArgs[2]
+				if memberName then
+					error(`invalid attribute type '{attributeType}' of '{self.ClassName}'`)
+				else
+					error(`invalid attribute type '{attributeType}' of '{self.ClassName}::{memberName}'`)
+				end
+			end
+
+			local handler = info.Handler
+			if handler then
+				handler(self, unpack(attributeArgs, 2))
+			end
+
+			local isClassAttribute = false
+			if info.ApplyType == AttributeApplyType.Class then
+				self:AddClassAttribute(attributeType, value)
+			else
+				local memberName = attributeArgs[2]
+				self:AddMemberAttribute(memberName, attributeType, value)
+			end
+		end
+
+		function ClassBuilder:HandleAttributeField(fieldName, value)
+			local attributeArgs = parseAttributeString(fieldName)
+
+			if #attributeArgs == 0 then
+				error(`unable to parse attribute '{fieldName}' of '{self.ClassName}'`)
+			end
+
+			self:HandleAttribute(attributeArgs, value)
+
+			-- TODO: may be unsafe
+			rawset(self.Class, fieldName, nil)
+		end
+
+		function ClassBuilder:AddMemberAttribute(memberName, type, value)
+			local attributes = self.MemberAttributes[memberName]
+			if not attributes then
+				attributes = {}
+				self.MemberAttributes[memberName] = attributes
+			end
+
+			if attributes[type] then
+				warn(`duplicate attribute {self.ClassName}::{memberName}`, type)
+			end
+
+			attributes[type] = value
+		end
+
+		function ClassBuilder:AddClassAttribute(type, value)
+			self.ClassAttributes[type] = value
+		end
+
+		function ClassBuilder:HandleMembers(name)
+			local vtmembers = self.VtMembers
+
+			for name, memberOrValue in next, self.Class do
+				if isAttribute(name) then
+					self:HandleAttributeField(name, memberOrValue)
+				else
+					vtmembers[name] = memberOrValue
 				end
 			end
 		end
 
-
-		local finalConstructor
-		local constructor = class[CLASS_CONSTRUCTOR]
-
-		if constructor then
-			finalConstructor = function(...)
-				local object = setmetatable({}, class)
-				constructor(object, ...)
-				return object
-			end
-		else
-			finalConstructor = function()
-				return setmetatable({}, class)
-			end
+		function ClassBuilder:AssignClassCoreComponents()
+			local class = self.Class
+			rawset(class, CLASS_OWN_MEMBERS, self.VtMembers)
+			rawset(class, CLASS_VTMEMBER_OVERRIDES, {})
+			rawset(class, CLASS_TYPENAME, self.ClassName)
+			rawset(class, CLASS_ID, classId)
+			rawset(class, CLASS_MEMBER_ATTRIBUTES, self.MemberAttributes)
+			rawset(class, CLASS_ATTRIBUTES, self.ClassAttributes)
 		end
 
-		if hasClassAttribute(class, AttributeType.Singleton) then
-			local instance
-			local constructor = finalConstructor
-			finalConstructor = function(...)
-				if instance then
+		function ClassBuilder:HandleSingleton()
+			if self.HasClassAttribute(self.Class, AttributeType.Singleton) then
+				local instance
+				local constructor = self.FinalConstructor
+				self.FinalConstructor = function(...)
+					if instance then
+						return instance
+					end
+
+					instance = constructor(...)
 					return instance
 				end
-
-				instance = constructor(...)
-				return instance
 			end
 		end
 
-		class[CLASS_OBJECT_CREATOR] = finalConstructor
+		function ClassBuilder:Build(className, class, ...)
+			self.Class = class
+			self.ClassName = className
+
+			self.MemberAttributes = {}
+			self.ClassAttributes = {}
+			self.VtMembers = {}
+			self.Destructors = {}
+
+			self.ThisDestructor = nil
+			self.FinalConstructor = emptyFunction
+
+			self:HandleMembers()
+			self:AssignClassCoreComponents()
+			self:InitAndValidateInheritance(...)
+			self:SetIndex()
+			self:SetThisDestructor()
+			self:ProcessInheritance()
+			self:HandleDebugAndInitialObjectCreators()
+			self:HandleSingleton()
+
+			class[CLASS_OBJECT_CREATOR] = self.FinalConstructor
+		end
 	end
 
+	classBuilder = ClassBuilder.new()
 end
 
 local function buildclass(className, class, ...)
-	prepareClass(className, class, ...)
-	finalizeClass(className, class)
-	table.freeze(class)
+	classBuilder:Build(className, class, ...)
+
+	if not hasClassAttribute(class, AttributeType.NoFreeze) then
+		table.freeze(class)
+	end
+
 	return class
 end
 
@@ -839,6 +1072,8 @@ local function getallnodesize(t)
 	end
 	return size
 end
+
+buildclass("DuskObject", DuskObject)
 
 local library = {}
 

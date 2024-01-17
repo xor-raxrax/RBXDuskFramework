@@ -1,7 +1,7 @@
 local function randomFrom2Ranges(range1Start, range1End, range2Start, range2End)
 	local range1Size = range1End - range1Start + 1
 	local range2Size = range2End - range2Start + 1
-	
+
 	local sum = range1Size + range2Size
 
 	local randomSum = math.random(sum)

@@ -5,7 +5,7 @@ shared.kernelSettings = {
 		Enabled = false,
 
 		AddTostringMetamethod = true,
-		
+
 		LogCalls = false,
 		IgnoreSpecialMethodCallLog = true,
 		SpecialMethodNames = {},
@@ -13,21 +13,13 @@ shared.kernelSettings = {
 
 	LocalPackageLookupUseGetfenv = false,
 
-	EnumsModuleName = "Enums",
-	ClassesFolderName = "Classes",
-	LibrariesFolderName = "Libraries",
-	
 	GenerateDefaultDestructor = true,
 	AlwaysInheritDuskObject = true,
 
-	WarnExplicitDuskObjectInheritance = true,
-	WarnImplicitDuskObjectInheritance = false,
-
 	LogClassBuildingProcess = false,
 
-	MethodAttributePrefix = "__attr_",
 	WarnOverrideOnMissingOverrideAttribute = true,
-	
+
 	PureVirtualMethodCallError = false,
 
 	ClassInstanceCleanupInformer = {
@@ -44,9 +36,6 @@ local kernelFolder = rootFodler.Dusk
 
 shared.rootFolder = rootFodler
 
--- predefinition
-shared.DuskObject = {}
-
 local baseLibrary do
 	baseLibrary = require(kernelFolder.BaseLibrary)
 
@@ -57,7 +46,6 @@ local baseLibrary do
 	end
 end
 
-require(kernelFolder.DuskObject)
 shared.kernel = require(kernelFolder.Kernel)
 
 -- intended only for use by main framework components and kernel

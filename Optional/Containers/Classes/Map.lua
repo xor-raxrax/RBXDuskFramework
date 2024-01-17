@@ -1,8 +1,8 @@
-local Collection = shared.kernel:GetKernelClass("Collection")
+local Collection = shared.kernel:GetLocalClass("Collection")
 
 local Map = {} do
 	
-	Map.__base = {Collection}
+	Map.__base = { Collection }
 	
 	function Map:constructor()
 		Collection.constructor(self)

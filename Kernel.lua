@@ -2,6 +2,10 @@ local shared = shared
 local buildclass = shared.buildclass
 local kernelSettings = shared.kernelSettings
 
+local ENUMS_MODULE_NAME = "Enums"
+local CLASSES_FODLER_NAME = "Classes"
+local LIBRARIES_FOLDER_NAME = "Libraries"
+
 local Module = {} do
 
 	function Module:constructor(module : Instance)
@@ -25,12 +29,12 @@ local Module = {} do
 		if not class then return end
 
 		if not class.__type then
-			shared.buildclass(name, class)
+			buildclass(name, class)
 		end
 
 		return class
 	end
-	
+
 	buildclass("Module", Module)
 end
 
@@ -44,7 +48,7 @@ local ModuleCollector = {} do
 		self.Modules = {}
 		self.ModulesTypeName = fileTypeName
 	end
-	
+
 	ModuleCollector.__attr_virtual__Collect = true
 	function ModuleCollector:_Collect()
 		for _, file in next, self.RootFolder:GetDescendants() do
@@ -105,7 +109,7 @@ local Package = {} do
 
 	function Package:constructor(manager, rootFolder)
 		ModuleCollector.constructor(self, rootFolder, "class")
-		
+
 		self.Name = rootFolder.Name
 		self._ModuleToName = {}
 		self._PackageManager = manager
@@ -122,7 +126,7 @@ local Package = {} do
 		function invalidIndexHandler:__index(name)
 			errorf("Enum '%s' has no '%s' member", self.__Name, tostring(name))
 		end
-		
+
 		function initializeEnums(enums)
 			for enumName, enum in next, enums do
 				local toAdd = {}
@@ -170,7 +174,7 @@ local Package = {} do
 	function Package:_Collect(root)
 		for _, child in next, root:GetChildren() do
 			if child:IsA("ModuleScript") then
-				if child.Name == kernelSettings.EnumsModuleName then
+				if child.Name == ENUMS_MODULE_NAME then
 					self:_RegisterEnums(child)
 				else
 					self:_AddModule(child)
@@ -184,7 +188,7 @@ local Package = {} do
 		end
 	end
 
-	shared.buildclass("Package", Package, ModuleCollector)
+	buildclass("Package", Package, ModuleCollector)
 end
 
 local PackageManager = {} do
@@ -340,18 +344,11 @@ end
 local Kernel = {} do
 
 	Kernel.__attr_singleton = true
-	
+
 	function Kernel:constructor()
-		local kernelFolder = script.Parent
-		self._KClassCollector = ModuleCollector.new(kernelFolder[kernelSettings.ClassesFolderName], "class")
-		self._KLibrariesCollector = ModuleCollector.new(kernelFolder[kernelSettings.LibrariesFolderName], "library")
-
-		self._KClassCollector:_Collect()
-		self._KLibrariesCollector:_Collect()
-
 		local rootFolder = shared.rootFolder
-		self._PackageManager = PackageManager.new(rootFolder[kernelSettings.ClassesFolderName])
-		self._LibrariesCollector = ModuleCollector.new(rootFolder[kernelSettings.LibrariesFolderName], "library")
+		self._PackageManager = PackageManager.new(rootFolder[CLASSES_FODLER_NAME])
+		self._LibrariesCollector = ModuleCollector.new(rootFolder[LIBRARIES_FOLDER_NAME], "library")
 
 		self._LibrariesCollector:_Collect()
 	end
@@ -359,7 +356,7 @@ local Kernel = {} do
 	function Kernel:GetPackage(name, noThrow)
 		return self._PackageManager:GetPackage(name, if noThrow == nil then false else expecttype(noThrow, "boolean"))
 	end
-	
+
 	function Kernel:GetLocalPackage()
 		local _, package = self._PackageManager:_GetLocalPackage(1)
 		return package
@@ -369,10 +366,6 @@ local Kernel = {} do
 
 	function Kernel:GetClass(name)
 		return expectclasstype(self._PackageManager:GetClass(name, 1), name)
-	end
-
-	function Kernel:GetKernelClass(name)
-		return expectclasstype(self._KClassCollector:_GetModuleReturnValueAsClass(name), name)
 	end
 	
 	function Kernel:GetLocalClass(name)
@@ -384,10 +377,6 @@ local Kernel = {} do
 			or self._KLibrariesCollector:Get(name)
 	end
 
-	function Kernel:GetKernelLibrary(name)
-		return self._KLibrariesCollector:_GetModuleReturnValue(name)
-	end
-
 	function Kernel:GetEnum(name)
 		return self._PackageManager:GetEnum(name, 1)
 	end
@@ -395,8 +384,8 @@ local Kernel = {} do
 	function Kernel:GetLocalEnum(name)
 		return self._PackageManager:GetLocalEnum(name, 1)
 	end
-	
-	shared.buildclass("Kernel", Kernel)
+
+	buildclass("Kernel", Kernel)
 end
 
 kernel = Kernel.new()

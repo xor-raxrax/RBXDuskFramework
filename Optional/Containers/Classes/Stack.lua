@@ -1,8 +1,8 @@
-local Collection = shared.kernel:GetKernelClass("Collection")
+local Collection = shared.kernel:GetLocalClass("Collection")
 
 local Stack = {} do
 	
-	Stack.__base = {Collection}
+	Stack.__base = { Collection }
 	
 	function Stack:constructor()
 		Collection.constructor(self)
