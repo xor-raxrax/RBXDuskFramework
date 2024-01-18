@@ -111,26 +111,6 @@ local inext = ipairs({})
 
 -- expanded output
 
-local function dump_table(t, indent)
-	indent = indent or 0
-	local keys = {}
-	for k, v in pairs(t) do
-		table.insert(keys, k)
-	end
-	table.sort(keys)
-	for _, k in ipairs(keys) do
-		local v = t[k]
-		if type(v) == "table" then
-			print(string.format("%s[%s] = {", string.rep("  ", indent), tostring(k)))
-			dump_table(v, indent + 1)
-			print(string.format("%s},", string.rep("  ", indent)))
-		else
-			local fmt = type(v) == "string" and '%q' or '%s'
-			print(string.format("%s[%s] = %s,", string.rep("  ", indent), tostring(k), string.format(fmt, tostring(v))))
-		end
-	end
-end
-
 local settings = {
 	max_layer = 12,
 	tab_string = "  ", -- console shortens \t to single space
@@ -448,8 +428,6 @@ local DuskObject = {} do
 		end
 	end
 
-	local expectclass = shared.expectclass
-
 	function DuskObject.IsDerivedOf(what, class)
 		local vtype = type(class)
 
@@ -468,8 +446,6 @@ local DuskObject = {} do
 		return what.__index == class.__index
 			or DuskObject.IsDerivedOf(what, class)
 	end
-
-	local kernelSettings = shared.kernelSettings
 
 	if kernelSettings.ClassInstanceCleanupInformer.Enabled then
 
@@ -523,23 +499,6 @@ local classBuilder do
 
 	local alwaysInheritDuskObject = kernelSettings.AlwaysInheritDuskObject
 	local logClassBuildingProcess = kernelSettings.LogClassBuildingProcess
-
-	local function makeWarn(className, message)
-		local formatted = string.format("class '%s' %s", className, message)
-		warn(debug.traceback(formatted, 3))
-	end
-
-	local function isMemberVirtual(class, memberName)
-		local attributes = rawget(class, CLASS_MEMBER_ATTRIBUTES)
-		local memberAttributes = attributes[memberName]
-
-		if not memberAttributes then
-			return false
-		end
-
-		return memberAttributes[AttributeType.Virtual]
-			or memberAttributes[AttributeType.PureVirtual]
-	end
 
 	local pureVirtualMethodCallError = kernelSettings.PureVirtualMethodCallError
 
@@ -600,16 +559,6 @@ local classBuilder do
 			if index == nil or type(index) == "table" and index ~= class then
 				rawset(class, "__index", class)
 			end
-		end
-
-		function ClassBuilder:SetThisDestructor()
-			local class = self.Class
-			local thisDestructor = rawget(class, CLASS_DESTRUCTOR)
-			if not thisDestructor then
-				rawset(class, CLASS_DESTRUCTOR, emptyFunction)
-				thisDestructor = emptyFunction
-			end
-			self.ThisDestructor = thisDestructor
 		end
 
 		local function collectInherited(result, currentClass)
@@ -711,8 +660,6 @@ local classBuilder do
 			local class = self.Class
 			local className = self.ClassName
 
-			local destructors = {self.ThisDestructor}
-
 			local constructor = class[CLASS_CONSTRUCTOR]
 			if not constructor then
 				class[CLASS_CONSTRUCTOR] = emptyFunction
@@ -800,18 +747,14 @@ local classBuilder do
 				end
 			end
 
-
-			local finalConstructor
-			local constructor = class[CLASS_CONSTRUCTOR]
-
 			if constructor then
-				self.FinalConstructor = function(...)
+				self.ObjectCreator = function(...)
 					local object = setmetatable({}, class)
 					constructor(object, ...)
 					return object
 				end
 			else
-				self.FinalConstructor = function()
+				self.ObjectCreator = function()
 					return setmetatable({}, class)
 				end
 			end
@@ -834,6 +777,15 @@ local classBuilder do
 		end
 
 		function ClassBuilder:BuildDestructor()
+			local class = self.Class
+			
+			local thisDestructor = rawget(class, CLASS_DESTRUCTOR)
+			if thisDestructor then
+				table.insert(self.Destructors, thisDestructor)
+			end
+			
+			local finalDestructor
+			
 			local destructors = self.Destructors
 			if #destructors > 1 then
 
@@ -847,15 +799,18 @@ local classBuilder do
 					end
 				end
 
-				rawset(self.Class, CLASS_DESTRUCTOR, function(self)
+				finalDestructor = function(self)
 					for _, destructor in next, destructors do
 						destructor(self)
 					end
-				end)
+				end
+			else
+				finalDestructor = emptyFunction
 			end
+			
+			rawset(class, CLASS_DESTRUCTOR, finalDestructor)
 		end
 
-		local attributePrefix = "__attr_"
 		local function parseAttributeString(attributeString)
 			local parts = {}
 			local partStartPos, pos = 1, 1
@@ -942,7 +897,6 @@ local classBuilder do
 				handler(self, unpack(attributeArgs, 2))
 			end
 
-			local isClassAttribute = false
 			if info.ApplyType == AttributeApplyType.Class then
 				self:AddClassAttribute(attributeType, value)
 			else
@@ -1007,13 +961,13 @@ local classBuilder do
 		function ClassBuilder:HandleSingleton()
 			if self.HasClassAttribute(self.Class, AttributeType.Singleton) then
 				local instance
-				local constructor = self.FinalConstructor
-				self.FinalConstructor = function(...)
+				local creator = self.ObjectCreator
+				self.ObjectCreator = function(...)
 					if instance then
 						return instance
 					end
 
-					instance = constructor(...)
+					instance = creator(...)
 					return instance
 				end
 			end
@@ -1028,19 +982,18 @@ local classBuilder do
 			self.VtMembers = {}
 			self.Destructors = {}
 
-			self.ThisDestructor = nil
-			self.FinalConstructor = emptyFunction
+			self.ObjectCreator = emptyFunction
 
 			self:HandleMembers()
 			self:AssignClassCoreComponents()
 			self:InitAndValidateInheritance(...)
 			self:SetIndex()
-			self:SetThisDestructor()
 			self:ProcessInheritance()
 			self:HandleDebugAndInitialObjectCreators()
+			self:BuildDestructor()
 			self:HandleSingleton()
 
-			class[CLASS_OBJECT_CREATOR] = self.FinalConstructor
+			class[CLASS_OBJECT_CREATOR] = self.ObjectCreator
 		end
 	end
 
