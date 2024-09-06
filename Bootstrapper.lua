@@ -21,9 +21,10 @@ shared.kernelSettings = {
 	WarnOverrideOnMissingOverrideAttribute = true,
 
 	PureVirtualMethodCallError = false,
+	SelfArgumentValidationInConstructors = true,
 
 	ClassInstanceCleanupInformer = {
-		Enabled = true,
+		Enabled = false,
 		UseError = false,
 		InformAliveThread = false,
 		InformAliveRBXScriptConnection = false,
