@@ -46,7 +46,6 @@ local function getcallstacksize()
 end
 
 local CLASS_OWN_MEMBERS = "__members"
-local CLASS_VTMEMBER_OVERRIDES = "__override_members"
 local CLASS_BASE = "__base"
 local CLASS_TYPENAME = "__type"
 local CLASS_ID = "__id"
@@ -58,6 +57,16 @@ local CLASS_DESTRUCTOR = "Destroy"
 local CLASS_OBJECT_CREATOR = "new"
 
 local INSTANCE_ID = "__instanceId"
+
+local function getDebugInfo(method)
+	local source, line = debug.info(method, "sl")
+	return `{source}:{line}`
+end
+
+local function getFullDebugInfo(class, methodName)
+	return `'{class.__type}.{methodName}' ({getDebugInfo(class[methodName])})`
+end
+
 
 local function isclasstyperaw(class, expectedType)
 	return class[CLASS_TYPENAME] == expectedType
@@ -446,7 +455,17 @@ local methodLinker do
 		function MethodLinker:RegisterImplementation(method, implementation)
 			self.MethodToImplementation[method] = implementation
 		end
-
+		
+		function MethodLinker:RemoveBuildInfo(class)
+			if not (debugModeEnabled or kernelSettings.SelfArgumentValidationInConstructors) then
+				rawset(class, CLASS_BASE, nil)
+			end
+			
+			rawset(class, CLASS_OWN_MEMBERS, nil)
+			rawset(class, CLASS_MEMBER_ATTRIBUTES, nil)
+			rawset(class, CLASS_ATTRIBUTES, nil)
+		end
+		
 		function MethodLinker:Finalize()
 			local methodToImplementation = self.MethodToImplementation
 			if not next(methodToImplementation) then return end
@@ -455,7 +474,6 @@ local methodLinker do
 			
 			for _, class in next, self.Classes do
 				
-				--warn(class.__type)
 				for methodName, method in iterateClassMethods(class) do
 					if methodName == "new" then continue end
 					
@@ -465,17 +483,22 @@ local methodLinker do
 					if implementation == emptyFunction then
 						unresolvedMethodImplementation = true
 						
-						local source, line = debug.info(method, "sl")
+						warnf("unresolved method implementation of '%s.%s' (%s)",
+							getFullDebugInfo(class, methodName))
 						
-						warnf("unresolved method implementation of '%s.%s' (%s:%s)",
-							class.__type, methodName, source, line)
 						continue
 					end
 					
 					class[methodName] = implementation
 				end
-
-				if not hasClassAttribute(class, AttributeType.NoFreeze) then
+				
+				local hasNoFreeze = hasClassAttribute(class, AttributeType.NoFreeze)
+				
+				if not debugModeEnabled then
+					self:RemoveBuildInfo(class)
+				end
+				
+				if not hasNoFreeze then
 					table.freeze(class)
 				end
 			end
@@ -503,15 +526,19 @@ local classBuilder do
 	local logClassBuildingProcess = kernelSettings.LogClassBuildingProcess
 
 	local pureVirtualMethodCallError = kernelSettings.PureVirtualMethodCallError
-
-	local function pureVirtualMethodHandler(self)
-		local name = debug.info(2, "ns")
-		local message = string.format("attempt to call pure virtual method %s:%s()", self.__type, name)
-		if pureVirtualMethodCallError then
-			error(message)
-		else
-			warn(debug.traceback(message))
+	
+	local function createPureVirtualMethodHandler(class, memberName)
+		local function pureVirtualMethodHandler(self)
+			local message = string.format("attempt to call pure virtual method %s for class '%s'",
+				getFullDebugInfo(class, memberName), self.__type)
+			
+			if pureVirtualMethodCallError then
+				error(message)
+			else
+				warn(debug.traceback(message))
+			end
 		end
+		return pureVirtualMethodHandler
 	end
 
 	local attributePrefix = "__attr_"
@@ -530,7 +557,7 @@ local classBuilder do
 
 			self.MemberAttributes = nil
 			self.ClassAttributes = nil
-			self.VtMembers = nil
+			self.OwnMembers = nil
 			self.ClassIdCounter = 0
 			
 			self.ClassesWithDeclarations = {}
@@ -538,8 +565,7 @@ local classBuilder do
 			return self
 		end
 
-		function ClassBuilder.IsMemberVirtual(class, memberName)
-			local attributes = rawget(class, CLASS_MEMBER_ATTRIBUTES)
+		function ClassBuilder.IsMemberVirtual_attributes(attributes, memberName)
 			local memberAttributes = attributes[memberName]
 
 			if not memberAttributes then
@@ -547,6 +573,15 @@ local classBuilder do
 			end
 
 			return memberAttributes[AttributeType.Virtual]
+		end
+		
+		function ClassBuilder.IsMemberVirtual(class, memberName)
+			local attributes = rawget(class, CLASS_MEMBER_ATTRIBUTES)
+			if not attributes then
+				return false
+			end
+			
+			return ClassBuilder.IsMemberVirtual_attributes(attributes, memberName)
 		end
 
 		function ClassBuilder.HasClassAttribute(class, name)
@@ -620,15 +655,15 @@ local classBuilder do
 						table.insert(self.Destructors, member)
 						continue
 					end
-
+					
 					if self.IsMemberVirtual(baseClass, memberName) then
 						inheritedVirtualMethods[memberName] = true
 					end
 
 					if class[memberName] and not inheritedVirtualMethods[memberName] then
 						print("inheritedVirtualMethods", inheritedVirtualMethods)
-						print("class", class)
-						print("baseClass", baseClass)
+						print("attempted to override", getFullDebugInfo(baseClass, memberName), baseClass)
+						print("attempted to override with", getFullDebugInfo(class, memberName), class)
 						error(`cannot override non-virtual method '{memberName}'`)
 					end
 
@@ -646,7 +681,7 @@ local classBuilder do
 
 			end
 
-			for memberName, member in next, rawget(class, CLASS_OWN_MEMBERS) do
+			for memberName, member in next, self.OwnMembers do
 				if inheritedVirtualMethods[memberName] then
 					if logClassBuildingProcess then
 						warn(`\t overriding {memberName}`)
@@ -876,8 +911,8 @@ local classBuilder do
 		local attributeInfo do
 
 			local function pureVirtualHandler(classBuilder, memberName)
-				classBuilder.VtMembers[memberName] = pureVirtualMethodHandler
-				classBuilder:HandleAttribute({AttributeType.Virtual, memberName}, memberName)
+				classBuilder.OwnMembers[memberName] = createPureVirtualMethodHandler(classBuilder.Class, memberName)
+				classBuilder:HandleAttribute({AttributeType.Virtual, memberName}, true)
 			end
 			
 			local function declarationHandler(classBuilder, memberName)
@@ -968,21 +1003,25 @@ local classBuilder do
 		end
 
 		function ClassBuilder:HandleMembers(name)
-			local vtmembers = self.VtMembers
-
-			for name, memberOrValue in next, self.Class do
+			local ownMembers = self.OwnMembers
+			local class = self.Class
+			
+			for name, memberOrValue in next, class do
 				if isAttribute(name) then
 					self:HandleAttributeField(name, memberOrValue)
 				else
-					vtmembers[name] = memberOrValue
+
+					if not self.IsMemberVirtual_attributes(self.MemberAttributes, name) then
+						ownMembers[name] = memberOrValue
+					end
+					
 				end
 			end
 		end
 
 		function ClassBuilder:AssignClassCoreComponents()
 			local class = self.Class
-			rawset(class, CLASS_OWN_MEMBERS, self.VtMembers)
-			rawset(class, CLASS_VTMEMBER_OVERRIDES, {})
+			rawset(class, CLASS_OWN_MEMBERS, self.OwnMembers)
 			rawset(class, CLASS_TYPENAME, self.ClassName)
 			rawset(class, CLASS_ID, self.ClassIdCounter)
 			rawset(class, CLASS_MEMBER_ATTRIBUTES, self.MemberAttributes)
@@ -995,7 +1034,7 @@ local classBuilder do
 
 			self.MemberAttributes = {}
 			self.ClassAttributes = {}
-			self.VtMembers = {}
+			self.OwnMembers = {}
 			self.Destructors = {}
 
 			self.ObjectCreator = emptyFunction

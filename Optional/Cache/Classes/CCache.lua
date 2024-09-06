@@ -1,10 +1,11 @@
 local Cache = shared.kernel:GetLocalClass("Cache")
 
-local expecttype = shared.expecttype
+local expecttype = shared.kernel:GetBaseLibrary().expecttype
 
 local CCache = {} do
 	
-	CCache.__base = {Cache}
+	CCache.__base = { Cache }
+	
 	function CCache:constructor(constructor, cleaner)
 		Cache.constructor(self, constructor)
 		

@@ -1,4 +1,4 @@
-local expecttype = shared.expecttype
+local expecttype = shared.kernel:GetBaseLibrary().expecttype
 
 local Cache = {} do
 	

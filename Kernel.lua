@@ -131,7 +131,7 @@ local Package = {} do
 	
 	function Package:constructor(packageManager, folder, name, prefixName)
 		local fullName = createFullName(prefixName, name)
-		ModuleCollector.constructor(self, folder, fullName, "class")
+		ModuleCollector.constructor(self)
 
 		self.Name = name
 		self.FullName = fullName
@@ -147,7 +147,7 @@ local Package = {} do
 	function Package:GetClass(name)
 		local module = self.CollectedModules[name]
 		if not module then
-			errorf("'%s' is invalid library name", name)
+			errorf("'%s' is invalid class name", name)
 		end
 		return module:GetReturnValueAsClass()
 	end
@@ -281,11 +281,19 @@ local PackageManager = {} do
 	end
 
 	function PackageManager:GetClass(fullName : string)
-		return self.Classes[fullName]:GetReturnValueAsClass()
+		local classModule = self.Classes[fullName]
+		if not classModule then
+			errorf("'%s' is invalid class module full name", fullName)
+		end
+		return classModule:GetReturnValueAsClass()
 	end
 
 	function PackageManager:GetEnums(fullName : string)
-		return self.Enums[fullName]
+		local enums = self.Enums[fullName]
+		if not enums then
+			errorf("'%s' is invalid enums full name", fullName)
+		end
+		return enums
 	end
 	
 	function PackageManager:BuildPackage(folder, name, prefixName)

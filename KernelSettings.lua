@@ -14,9 +14,7 @@ local kernelSettings = {
 
 	LogClassBuildingProcess = false,
 
-	WarnOverrideOnMissingOverrideAttribute = true,
-
-	PureVirtualMethodCallError = false,
+	PureVirtualMethodCallError = true,
 	SelfArgumentValidationInConstructors = true,
 
 	ClassInstanceCleanupInformer = {
