@@ -1,4 +1,4 @@
-local kernelSettings = shared.kernelSettings
+local kernelSettings = require(script.Parent.KernelSettings)
 local debugModeEnabled = kernelSettings.DebugMode.Enabled
 
 -- reflection
@@ -1076,6 +1076,8 @@ buildclass("DuskObject", DuskObject)
 
 local library = {}
 
+library.__linkimplementations = __linkimplementations
+library.__registerimplementation = __registerimplementation
 
 library.printf = printf
 library.warnf = warnf
@@ -1111,8 +1113,6 @@ library.isclasstype = isclasstype
 library.isclass = isclass
 
 library.buildclass = buildclass
-library.__linkimplementations = __linkimplementations
-library.__registerimplementation = __registerimplementation
 
 library.getrawclassid = getrawclassid
 library.getrawclassname = getrawclassname

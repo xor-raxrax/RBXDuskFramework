@@ -52,7 +52,7 @@ local Collection = {} do
 		return table.find(self.Items, item)
 	end
 	
-	local errorf = shared.errorf
+	local errorf = shared.kernel:GetBaseLibrary().errorf
 	
 	Collection.__attr_virtual_Remove = true
 	function Collection:Remove(item)

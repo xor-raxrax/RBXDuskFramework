@@ -1,58 +1,8 @@
-local shared = shared
+local rootFolder = script
 
-shared.kernelSettings = {
-	DebugMode = {
-		Enabled = false,
+local Kernel = require(rootFolder.Dusk.Kernel)
+shared.kernel = Kernel.new(rootFolder)
 
-		AddTostringMetamethod = true,
-
-		LogCalls = false,
-		IgnoreSpecialMethodCallLog = true,
-		SpecialMethodNames = {},
-	},
-
-	LocalPackageLookupUseGetfenv = false,
-
-	GenerateDefaultDestructor = true,
-	AlwaysInheritDuskObject = true,
-
-	LogClassBuildingProcess = false,
-
-	WarnOverrideOnMissingOverrideAttribute = true,
-
-	PureVirtualMethodCallError = false,
-	SelfArgumentValidationInConstructors = true,
-
-	ClassInstanceCleanupInformer = {
-		Enabled = false,
-		UseError = false,
-		InformAliveThread = false,
-		InformAliveRBXScriptConnection = false,
-		InformRBXInstance = false,
-	},
-}
-
-local rootFodler = script
-local kernelFolder = rootFodler.Dusk
-
-shared.rootFolder = rootFodler
-
-local baseLibrary do
-	baseLibrary = require(kernelFolder.BaseLibrary)
-
-	shared.baseLibrary = baseLibrary
-
-	for k, v in next, baseLibrary do
-		shared[k] = v
-	end
-end
-
-shared.kernel = require(kernelFolder.Kernel)
-
--- intended only for use by main framework components and kernel
-shared.kernelSettings = nil
-shared.rootFolder = nil
-
-require(rootFodler.Main)
+require(rootFolder.Main)
 
 return nil

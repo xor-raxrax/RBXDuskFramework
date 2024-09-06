@@ -14,7 +14,7 @@ end
 --]]
 
 local RttiObject = {} do
-	
+
 	function RttiObject:constructor(rttiId : number)
 		self.RttiId = rttiId
 	end
@@ -34,5 +34,5 @@ local RttiObject = {} do
 	function RttiObject:To<T>() : T
 		return (self :: T)
 	end
-	
+
 end
