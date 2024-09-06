@@ -316,6 +316,7 @@ local AttributeType do
 		Virtual = "virtual",
 		PureVirtual = "purevirtual",
 		NoFreeze = "nofreeze",
+		Declaration = "decl",
 	}
 
 	local toAdd = {}
@@ -397,6 +398,104 @@ do
 	setmetatable(classToNameMap, invalidIndexHandler)
 end
 
+local function iterateClassMethods(class)
+	local function iterator(class, memberName, member)
+		local nextKey, nextValue = next(class, memberName)
+
+		-- Loop through all members
+		while nextKey do
+			-- Check if the member is a function and doesn't start with "__"
+			if type(nextValue) == "function" and string.sub(nextKey, 1, 2) ~= "__" then
+				return nextKey, nextValue
+			end
+			-- Move to the next member
+			nextKey, nextValue = next(class, nextKey)
+		end
+
+		return nil
+	end
+
+	-- Return the iterator function along with the class and starting point (nil)
+	return iterator, class, nil
+end
+
+local emptyFunction = function()end
+
+local methodLinker do
+
+	local MethodLinker = {} do
+		MethodLinker.__index = MethodLinker
+
+		function MethodLinker.new()
+			local self = setmetatable({}, MethodLinker)
+
+			self.Classes = {}
+			self.MethodToImplementation = {}
+
+			return self
+		end
+
+		function MethodLinker:RegisterClass(class)
+			table.insert(self.Classes, class)
+		end
+
+		function MethodLinker:RegisterDeclaration(method)
+			self.MethodToImplementation[method] = emptyFunction
+		end
+
+		function MethodLinker:RegisterImplementation(method, implementation)
+			self.MethodToImplementation[method] = implementation
+		end
+
+		function MethodLinker:Finalize()
+			local methodToImplementation = self.MethodToImplementation
+			if not next(methodToImplementation) then return end
+			
+			local unresolvedMethodImplementation = false
+			
+			for _, class in next, self.Classes do
+				
+				--warn(class.__type)
+				for methodName, method in iterateClassMethods(class) do
+					if methodName == "new" then continue end
+					
+					local implementation = methodToImplementation[method]
+					if not implementation then continue end
+					
+					if implementation == emptyFunction then
+						unresolvedMethodImplementation = true
+						
+						local source, line = debug.info(method, "sl")
+						
+						warnf("unresolved method implementation of '%s.%s' (%s:%s)",
+							class.__type, methodName, source, line)
+						continue
+					end
+					
+					class[methodName] = implementation
+				end
+
+				if not hasClassAttribute(class, AttributeType.NoFreeze) then
+					table.freeze(class)
+				end
+			end
+			
+			if unresolvedMethodImplementation then
+				error("unresolved method implementation")
+			end
+		end
+		
+		function MethodLinker:RegisterClassImplementation(originalClass, implementationClass)
+			for methodName, method in next, implementationClass do
+				local declaredMethod = originalClass[methodName]
+				self.MethodToImplementation[declaredMethod] = method
+			end
+		end
+		
+	end
+	
+	methodLinker = MethodLinker.new()
+end
 
 local classBuilder do
 
@@ -419,9 +518,7 @@ local classBuilder do
 	local function isAttribute(name)
 		return string.sub(name, 1, #attributePrefix) == attributePrefix
 	end
-
-	local emptyFunction = function()end
-
+	
 	local ClassBuilder = {} do
 		ClassBuilder.__index = ClassBuilder
 
@@ -435,6 +532,8 @@ local classBuilder do
 			self.ClassAttributes = nil
 			self.VtMembers = nil
 			self.ClassIdCounter = 0
+			
+			self.ClassesWithDeclarations = {}
 			
 			return self
 		end
@@ -628,51 +727,49 @@ local classBuilder do
 				end
 			end
 
-			for memberName, memberFunction in next, class do
-				if type(memberFunction) ~= "function" then continue end
-				if string.sub(memberName, 1, 2) == "__" then continue end
+			for memberName, memberFunction in iterateClassMethods(class) do
 
 				local finalMemberFunction = memberFunction
 
 				if debugModeSettings.LogCalls then
 					local ignoreSpecialMethodCallLog = debugModeSettings.IgnoreSpecialMethodCallLog
+					
+					if ignoreSpecialMethodCallLog
+						and table.find(debugModeSettings.SpecialMethodNames, memberName) then
+						continue
+					end
+					
+					local lastFunction = finalMemberFunction
+					finalMemberFunction = function(...)
+						local arguments = ""
 
-					if not ignoreSpecialMethodCallLog
-						or (ignoreSpecialMethodCallLog and not table.find(debugModeSettings.SpecialMethodNames, memberName)) then
+						local isMethod = false
 
-						local lastFunction = finalMemberFunction
-						finalMemberFunction = function(...)
-							local arguments = ""
-
-							local isMethod = false
-
-							local first = ...
-							if type(first) == "table" and first[CLASS_TYPENAME] == className then
-								isMethod = true
-							end
-
-							local argSize = select("#", ...)
-							for i = isMethod and 2 or 1, argSize do
-								local separator = ""
-
-								if i < argSize then
-									separator ..= ", "
-								end
-
-								arguments ..= tostring(select(i, ...)) .. separator
-							end
-
-							warnf("%s%s%s%s(%s)",
-								string.rep("  ", getcallstacksize()),
-								isMethod and tostring(first) or className,
-								isMethod and ":" or ".",
-								memberName,
-								arguments
-							)
-
-							return lastFunction(...)
+						local first = ...
+						if type(first) == "table" and first[CLASS_TYPENAME] == className then
+							isMethod = true
 						end
 
+						local argSize = select("#", ...)
+						for i = isMethod and 2 or 1, argSize do
+							local separator = ""
+
+							if i < argSize then
+								separator ..= ", "
+							end
+
+							arguments ..= tostring(select(i, ...)) .. separator
+						end
+
+						warnf("%s%s%s%s(%s)",
+							string.rep("  ", getcallstacksize()),
+							isMethod and tostring(first) or className,
+							isMethod and ":" or ".",
+							memberName,
+							arguments
+						)
+
+						return lastFunction(...)
 					end
 
 				end
@@ -778,11 +875,15 @@ local classBuilder do
 
 		local attributeInfo do
 
-			local pureVirtualHandler = function(builder, memberName)
-				builder.VtMembers[memberName] = pureVirtualMethodHandler
-				builder:HandleAttribute({AttributeType.Virtual, memberName}, memberName)
+			local function pureVirtualHandler(classBuilder, memberName)
+				classBuilder.VtMembers[memberName] = pureVirtualMethodHandler
+				classBuilder:HandleAttribute({AttributeType.Virtual, memberName}, memberName)
 			end
-
+			
+			local function declarationHandler(classBuilder, memberName)
+				methodLinker:RegisterDeclaration(classBuilder.Class[memberName])
+			end
+			
 			attributeInfo = {
 
 				[AttributeType.Virtual] = {
@@ -798,6 +899,11 @@ local classBuilder do
 				[AttributeType.NoFreeze] = {
 					ApplyType = AttributeApplyType.Class,
 					Handler = nil,
+				},
+
+				[AttributeType.Declaration] = {
+					ApplyType = AttributeApplyType.Member,
+					Handler = declarationHandler,
 				},
 
 			}
@@ -912,6 +1018,7 @@ local classBuilder do
 			classToIdMap[self.Class] = self.ClassIdCounter
 			classToNameMap[self.Class] = self.ClassName
 			self.ClassIdCounter += 1
+			methodLinker:RegisterClass(self.Class)
 		end
 	end
 
@@ -920,12 +1027,15 @@ end
 
 local function buildclass(className, class, ...)
 	classBuilder:Build(className, class, ...)
-
-	if not hasClassAttribute(class, AttributeType.NoFreeze) then
-		table.freeze(class)
-	end
-
 	return class
+end
+
+local function __linkimplementations()
+	methodLinker:Finalize()
+end
+
+local function __registerimplementation(originalClass, implementationClass)
+	methodLinker:RegisterClassImplementation(originalClass, implementationClass)
 end
 
 local function readbit(n, index)
@@ -966,6 +1076,7 @@ buildclass("DuskObject", DuskObject)
 
 local library = {}
 
+
 library.printf = printf
 library.warnf = warnf
 library.errorf = errorf
@@ -1000,6 +1111,8 @@ library.isclasstype = isclasstype
 library.isclass = isclass
 
 library.buildclass = buildclass
+library.__linkimplementations = __linkimplementations
+library.__registerimplementation = __registerimplementation
 
 library.getrawclassid = getrawclassid
 library.getrawclassname = getrawclassname

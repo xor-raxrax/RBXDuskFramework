@@ -5,6 +5,7 @@ local kernelSettings = shared.kernelSettings
 local ENUMS_MODULE_NAME = "Enums"
 local CLASSES_FODLER_NAME = "Classes"
 local LIBRARIES_FOLDER_NAME = "Libraries"
+local IMPLEMENTATION_MODULE_EXTENSION = "impl"
 
 local Module = {} do
 
@@ -115,6 +116,7 @@ local Package = {} do
 		self._PackageManager = manager
 		self.Enums = nil
 		self._EnumsModule = nil
+		self._ModuleNameToImplementation = {}
 	end
 
 	function Package:GetClass(name, noThrow)
@@ -174,11 +176,24 @@ local Package = {} do
 	function Package:_Collect(root)
 		for _, child in next, root:GetChildren() do
 			if child:IsA("ModuleScript") then
-				if child.Name == ENUMS_MODULE_NAME then
+				
+				local fileName = child.Name
+				
+				if fileName == ENUMS_MODULE_NAME then
 					self:_RegisterEnums(child)
 				else
-					self:_AddModule(child)
-					self._PackageManager:AssociatedModuleWithPackage(child, self)
+					local moduleName, extension = string.match(fileName, "(.+)%.([^%.]+)$")
+					
+					if not moduleName then
+						moduleName = fileName
+					end
+					
+					if extension == IMPLEMENTATION_MODULE_EXTENSION then
+						self._ModuleNameToImplementation[moduleName] = child
+					else
+						self:_AddModule(child)
+						self._PackageManager:AssociatedModuleWithPackage(child, self)
+					end
 				end
 
 				self:_Collect(child)
@@ -318,7 +333,7 @@ local PackageManager = {} do
 	function PackageManager:_GetLocalPackage_Getfenv(localClassTraceOffset)
 		while true do
 			localClassTraceOffset += 1
-			local otherScript = getfenv(localClassTraceOffset).script
+			local otherScript = rawget(getfenv(localClassTraceOffset), "script")
 			if otherScript == script then break end
 
 			local package = self.ModuleToPackage[otherScript]
@@ -372,7 +387,6 @@ local Kernel = {} do
 
 	function Kernel:GetLibrary(name)
 		return self._LibrariesCollector:_GetModuleReturnValue(name)
-			or self._KLibrariesCollector:Get(name)
 	end
 
 	function Kernel:GetEnum(name)
@@ -382,7 +396,21 @@ local Kernel = {} do
 	function Kernel:GetLocalEnum(name)
 		return self._PackageManager:GetLocalEnum(name, 1)
 	end
+	
+	function Kernel:FinalizeClasses()
+		for packageName, package in next, self._PackageManager.Packages do
 
+			for moduleName, implementationModule in next, package._ModuleNameToImplementation do
+				local class = package:GetClass(moduleName)
+				shared.__registerimplementation(class, require(implementationModule))
+			end
+		end
+		
+		shared.__linkimplementations()
+		shared.__linkimplementations = nil
+		shared.__registerimplementation = nil
+	end
+	
 	buildclass("Kernel", Kernel)
 end
 
