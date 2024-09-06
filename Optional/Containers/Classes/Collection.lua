@@ -28,19 +28,19 @@ local Collection = {} do
 		end
 	end
 	
-	function Collection:ForEachCallMethod(name, ...)
+	function Collection:ForEachCallMethod(methodName, ...)
 		for _, item in next, self.Items do
-			item[name](item, ...)
+			item[methodName](item, ...)
 		end
 	end
 	
-	function Collection:ForEachCallCachedMethod(name, ...)
+	function Collection:ForEachCallCachedMethod(methodName, ...)
 		local items = self.Items
 		
 		local firstItem = next(items)
 		if not firstItem then return end
 		
-		local method = firstItem[name]
+		local method = firstItem[methodName]
 		
 		for _, item in next, items do
 			method(item, ...)

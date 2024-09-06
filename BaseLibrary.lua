@@ -19,38 +19,20 @@ local function isprimitive(value)
 		or value == nil
 end
 
-local function istype(value, t)
-	return type(value) == t
+local function istype_handler(myType : string, expectedType : string, ... : string)
+	if myType == expectedType then
+		return true
+	end
+	
+	if select('#', ...) > 0 then
+		return istype_handler(myType, ...)
+	end
+	
+	return false
 end
 
-local function istype2(value, t1, t2)
-	local vtype = type(value)
-	return vtype == t1
-		or vtype == t2
-end
-
-local function istype3(value, t1, t2, t3)
-	local vtype = type(value)
-	return vtype == t1
-		or vtype == t2
-		or vtype == t3
-end
-
-local function istype4(value, t1, t2, t3, t4)
-	local vtype = type(value)
-	return vtype == t1
-		or vtype == t2
-		or vtype == t3
-		or vtype == t4
-end
-
-local function istype5(value, t1, t2, t3, t4, t5)
-	local vtype = type(value)
-	return vtype == t1
-		or vtype == t2
-		or vtype == t3
-		or vtype == t4
-		or vtype == t5
+local function istype(value, ...)
+	return istype_handler(type(value), ...)
 end
 
 local function getcallstacksize()
@@ -74,6 +56,8 @@ local CLASS_ATTRIBUTES = "__class_attriutes"
 local CLASS_CONSTRUCTOR = "constructor"
 local CLASS_DESTRUCTOR = "Destroy"
 local CLASS_OBJECT_CREATOR = "new"
+
+local INSTANCE_ID = "__instanceId"
 
 local function isclasstyperaw(class, expectedType)
 	return class[CLASS_TYPENAME] == expectedType
@@ -111,9 +95,8 @@ local inext = ipairs({})
 
 -- expanded output
 
-local settings = {
+local outputSettings = {
 	max_layer = 12,
-	tab_string = "  ", -- console shortens \t to single space
 	use_type_instead_tostring = true,
 	ignore_tostring_metatable = true,
 	add_instance_class_name = true,
@@ -140,7 +123,7 @@ local function formatvalue(v)
 	if vtype == "string" then
 		v = string.format("\"%s\"", string.gsub(v, "[\\\a\b\f\n\r\t\v\"\']", escape))
 
-		if settings.normalize_string then
+		if outputSettings.normalize_string then
 			local success, normalized = pcall(utf8.nfcnormalize, v)
 			if success then
 				return normalized
@@ -155,7 +138,7 @@ local function formatvalue(v)
 			local __tostringValue = rawget(metatable, "__tostring")
 			if __tostringValue then
 
-				if settings.ignore_tostring_metatable then
+				if outputSettings.ignore_tostring_metatable then
 					return tostring(v)
 				end
 
@@ -169,7 +152,7 @@ local function formatvalue(v)
 			return tostring(v)
 		end
 
-		if settings.use_type_instead_tostring then
+		if outputSettings.use_type_instead_tostring then
 			return "<table>"
 		end
 
@@ -178,13 +161,13 @@ local function formatvalue(v)
 		if vtype == "Instance" then
 
 			local className = ""
-			if settings.add_instance_class_name then
+			if outputSettings.add_instance_class_name then
 				className = v.ClassName .. ": "
 			end
 
 			v = string.format("Instance: %s\"%s\"", className, string.gsub(v:GetFullName(), "[\\\a\b\f\n\r\t\v\"\']", escape))
 
-			if settings.normalize_string then
+			if outputSettings.normalize_string then
 				local success, normalized = pcall(utf8.nfcnormalize, v)
 				if success then
 					return normalized
@@ -192,7 +175,7 @@ local function formatvalue(v)
 			end
 
 		else
-			if settings.use_type_instead_tostring then
+			if outputSettings.use_type_instead_tostring then
 				return "<" .. vtype .. ">"
 			end
 
@@ -202,8 +185,8 @@ local function formatvalue(v)
 		return string.format("Vector3(%s)", tostring(v))
 	elseif vtype == "function" then
 
-		if settings.use_type_instead_tostring then
-			if settings.add_closure_type then
+		if outputSettings.use_type_instead_tostring then
+			if outputSettings.add_closure_type then
 				if islclosure(v) then
 					return "<lclosure>"
 				end
@@ -220,8 +203,7 @@ end
 local printedTables = {}
 
 local function expandedOutput(outputFunction, ...)
-	local tab = settings.tab_string
-	local maxLayer = settings.max_layer
+	local maxLayer = outputSettings.max_layer
 
 	local layer = 0
 	table.clear(printedTables)
@@ -229,7 +211,7 @@ local function expandedOutput(outputFunction, ...)
 	local function printl(t)
 		if layer == maxLayer then return end
 
-		local tab = string.rep(tab, layer)
+		local tab = string.rep('\t', layer)
 
 		if table.find(printedTables, t) then
 			outputFunction(tab, "*** already printed ***")
@@ -238,7 +220,7 @@ local function expandedOutput(outputFunction, ...)
 
 		table.insert(printedTables, t)
 
-		for i, v in pairs(t) do
+		for i, v in next, t do
 			outputFunction(tab, i, formatvalue(v))
 			if type(v) == "table" then
 				layer = layer + 1
@@ -259,7 +241,7 @@ local function expandedOutput(outputFunction, ...)
 end
 
 local function layerOutput(outputFunction, t)
-	for i, v in pairs(t) do
+	for i, v in next, t do
 		outputFunction(i, formatvalue(v))
 	end
 end
@@ -289,71 +271,18 @@ local function assertf(expression, ...)
 	return expression
 end
 
-local function expecttype(value, t)
-	if type(value) == t then
-		return value
+local function expecttype(value, expectedType, ...)
+	local myType = type(value)
+	if not istype_handler(myType, expectedType, ...) then
+		errorf("<%s> expected, got <%s>", expectedType, myType)
 	end
-
-	errorf("<%s> expected, got <%s>", t, type(value))
+	return value
 end
 
-local function expecttype2(value, t1, t2)
-	local vtype = type(value)
-
-	if vtype == t1
-		or vtype == t2
-	then
-		return value
-	end
-
-	errorf("<%s> expected, got <%s>", t1, vtype)
-end
-
-local function expecttype3(value, t1, t2, t3)
-	local vtype = type(value)
-
-	if vtype == t1
-		or vtype == t2
-		or vtype == t3
-	then
-		return value
-	end
-
-	errorf("<%s> expected, got <%s>", t1, vtype)
-end
-
-local function expecttype4(value, t1, t2, t3, t4)
-	local vtype = type(value)
-
-	if vtype == t1
-		or vtype == t2
-		or vtype == t3
-		or vtype == t4
-	then
-		return value
-	end
-
-	errorf("<%s> expected, got <%s>", t1, vtype)
-end
-
-local function expecttype5(value, t1, t2, t3, t4, t5)
-	local vtype = type(value)
-
-	if vtype == t1
-		or vtype == t2
-		or vtype == t3
-		or vtype == t4
-		or vtype == t5
-	then
-		return value
-	end
-
-	errorf("<%s> expected, got <%s>", t1, vtype)
-end
-
-local function expectrbxtype(value, expectedType)
-	if typeof(value) ~= expectedType then
-		errorf("<%s> expected, got <%s>", expectedType, typeof(value))
+local function expectrbxtype(value, expectedType, ...)
+	local myType = typeof(value)
+	if not istype_handler(myType, expectedType, ...) then
+		errorf("<%s> expected, got <%s>", expectedType, myType)
 	end
 	return value
 end
@@ -386,7 +315,6 @@ local AttributeType do
 	AttributeType = {
 		Virtual = "virtual",
 		PureVirtual = "purevirtual",
-		Singleton = "singleton",
 		NoFreeze = "nofreeze",
 	}
 
@@ -406,46 +334,6 @@ local function hasClassAttribute(class, name)
 end
 
 local DuskObject = {} do
-
-	function DuskObject:IsA(classOrName)
-		if type(classOrName) == "string" then
-			return self.__type == classOrName
-		end
-
-		return self.__index == classOrName
-	end
-
-	local function recursiveBaseTableClassSearch(t, name)
-		for _, class in next, t do
-			if class.__type == name then
-				return class
-			else
-				local foundClass = recursiveBaseTableClassSearch(class.__base, name)
-				if foundClass then
-					return foundClass
-				end
-			end
-		end
-	end
-
-	function DuskObject.IsDerivedOf(what, class)
-		local vtype = type(class)
-
-		if vtype == "string" then
-			return not not recursiveBaseTableClassSearch(what.__base, class)
-		end
-
-		expectclass(class)
-
-		return not not recursiveBaseTableClassSearch(what.__base, class.__type)
-	end
-
-	function DuskObject.IsDerivedOfOrSameClass(what, class)
-		expectclass(class)
-
-		return what.__index == class.__index
-			or DuskObject.IsDerivedOf(what, class)
-	end
 
 	if kernelSettings.ClassInstanceCleanupInformer.Enabled then
 
@@ -495,6 +383,21 @@ local DuskObject = {} do
 
 end
 
+
+local classToIdMap = {}
+local classToNameMap = {}
+do
+
+	local invalidIndexHandler = {}
+	function invalidIndexHandler:__index(class)
+		errorf("Passed class '%s' is not registered in class map", tostring(rawget(class, CLASS_TYPENAME)))
+	end
+
+	setmetatable(classToIdMap, invalidIndexHandler)
+	setmetatable(classToNameMap, invalidIndexHandler)
+end
+
+
 local classBuilder do
 
 	local alwaysInheritDuskObject = kernelSettings.AlwaysInheritDuskObject
@@ -517,9 +420,6 @@ local classBuilder do
 		return string.sub(name, 1, #attributePrefix) == attributePrefix
 	end
 
-	local classId = 0
-
-	local instanceIndex = 0
 	local emptyFunction = function()end
 
 	local ClassBuilder = {} do
@@ -534,7 +434,8 @@ local classBuilder do
 			self.MemberAttributes = nil
 			self.ClassAttributes = nil
 			self.VtMembers = nil
-
+			self.ClassIdCounter = 0
+			
 			return self
 		end
 
@@ -656,97 +557,45 @@ local classBuilder do
 			end
 		end
 
-		function ClassBuilder:HandleDebugAndInitialObjectCreators()
+		local instanceIndex = 0
+		function ClassBuilder:HandleObjectCreators()
 			local class = self.Class
-			local className = self.ClassName
 
-			local constructor = class[CLASS_CONSTRUCTOR]
-			if not constructor then
-				class[CLASS_CONSTRUCTOR] = emptyFunction
-			end
+			local constructor = class[CLASS_CONSTRUCTOR] or emptyFunction
+			
+			if debugModeEnabled or kernelSettings.SelfArgumentValidationInConstructors then
 
-			local debugModeSettings = kernelSettings.DebugMode
-
-			if debugModeEnabled then
-
-				if constructor then
-					class[CLASS_CONSTRUCTOR] = function(...)
-						assert(isclass(...), "class expected")
-						assertf(constructor(...) == nil, "constructor of '%s' cannot return value", className)
-					end
-				end
-
-				if debugModeSettings.AddTostringMetamethod then
-					local index = rawget(class, "__tostring")
-					if index == nil then
-						rawset(class, "__tostring", function(self)
-							return tostring(self[CLASS_ID]) .. "_" .. self[CLASS_TYPENAME]
-						end)
-					end
-				end
-
-				for memberName, memberFunction in next, class do
-					if type(memberFunction) ~= "function" then continue end
-					if string.sub(memberName, 1, 2) == "__" then continue end
-
-					local finalMemberFunction = memberFunction
-
-					if debugModeSettings.LogCalls then
-						local ignoreSpecialMethodCallLog = debugModeSettings.IgnoreSpecialMethodCallLog
-
-						if not ignoreSpecialMethodCallLog
-							or (ignoreSpecialMethodCallLog and not table.find(debugModeSettings.SpecialMethodNames, memberName)) then
-
-							local lastFunction = finalMemberFunction
-							finalMemberFunction = function(...)
-								local arguments = ""
-
-								local isMethod = false
-
-								local first = ...
-								if type(first) == "table" and first[CLASS_TYPENAME] == className then
-									isMethod = true
-								end
-
-								local argSize = select("#", ...)
-								for i = isMethod and 2 or 1, argSize do
-									local separator = ""
-
-									if i < argSize then
-										separator ..= ", "
-									end
-
-									arguments ..= tostring(select(i, ...)) .. separator
-								end
-
-								warnf("%s%s%s%s(%s)",
-									string.rep("  ", getcallstacksize()),
-									isMethod and tostring(first) or className,
-									isMethod and ":" or ".",
-									memberName,
-									arguments
-								)
-
-								return lastFunction(...)
+				local function baseTableClassSearch(baseClasses, classToFind)
+					for _, baseClass in next, baseClasses do
+						if baseClass == classToFind then
+							return baseClass
+						else
+							local foundClass = baseTableClassSearch(rawget(baseClass, CLASS_BASE), classToFind)
+							if foundClass then
+								return foundClass
 							end
-
 						end
-
 					end
-
-					if memberName == CLASS_OBJECT_CREATOR then
-						class[memberName] = function(...)
-							local instance = finalMemberFunction(...)
-							instance[CLASS_ID] = instanceIndex
-							instanceIndex += 1
-							return instance
-						end
+				end
+				
+				local originalConstructor = constructor
+				constructor = function(self, ...)
+					expectclass(self)
+					
+					-- check if we are calling constructor with self of it's own class or derived one
+					local myClass = getmetatable(self)
+					if getmetatable(self) == class
+						or baseTableClassSearch(rawget(myClass, CLASS_BASE), class)
+					then
+						originalConstructor(self, ...)
 					else
-						class[memberName] = finalMemberFunction
+						print("passed class:", myClass)
+						print("expected class:", class)
+						error("'self' class is unrelated to the class of the calling constructor")
 					end
 				end
 			end
-
+			
 			if constructor then
 				self.ObjectCreator = function(...)
 					local object = setmetatable({}, class)
@@ -758,8 +607,90 @@ local classBuilder do
 					return setmetatable({}, class)
 				end
 			end
+			
+			class[CLASS_CONSTRUCTOR] = constructor
 		end
 
+		function ClassBuilder:HandleDebug()
+			if not debugModeEnabled then return end
+			
+			local class = self.Class
+			local className = self.ClassName
+			
+			local debugModeSettings = kernelSettings.DebugMode
+
+			if debugModeSettings.AddTostringMetamethod then
+				local index = rawget(class, "__tostring")
+				if index == nil then
+					rawset(class, "__tostring", function(self)
+						return tostring(self[INSTANCE_ID]) .. "_" .. self[CLASS_TYPENAME]
+					end)
+				end
+			end
+
+			for memberName, memberFunction in next, class do
+				if type(memberFunction) ~= "function" then continue end
+				if string.sub(memberName, 1, 2) == "__" then continue end
+
+				local finalMemberFunction = memberFunction
+
+				if debugModeSettings.LogCalls then
+					local ignoreSpecialMethodCallLog = debugModeSettings.IgnoreSpecialMethodCallLog
+
+					if not ignoreSpecialMethodCallLog
+						or (ignoreSpecialMethodCallLog and not table.find(debugModeSettings.SpecialMethodNames, memberName)) then
+
+						local lastFunction = finalMemberFunction
+						finalMemberFunction = function(...)
+							local arguments = ""
+
+							local isMethod = false
+
+							local first = ...
+							if type(first) == "table" and first[CLASS_TYPENAME] == className then
+								isMethod = true
+							end
+
+							local argSize = select("#", ...)
+							for i = isMethod and 2 or 1, argSize do
+								local separator = ""
+
+								if i < argSize then
+									separator ..= ", "
+								end
+
+								arguments ..= tostring(select(i, ...)) .. separator
+							end
+
+							warnf("%s%s%s%s(%s)",
+								string.rep("  ", getcallstacksize()),
+								isMethod and tostring(first) or className,
+								isMethod and ":" or ".",
+								memberName,
+								arguments
+							)
+
+							return lastFunction(...)
+						end
+
+					end
+
+				end
+
+				if memberName == CLASS_OBJECT_CREATOR then
+					class[memberName] = function(...)
+						local instance = finalMemberFunction(...)
+						instance[INSTANCE_ID] = instanceIndex
+						instanceIndex += 1
+						return instance
+					end
+				else
+					class[memberName] = finalMemberFunction
+				end
+			end
+
+		end
+		
 		function ClassBuilder:InitAndValidateInheritance(...)
 			local class = self.Class
 			local baseClasses = rawget(class, CLASS_BASE)
@@ -778,14 +709,14 @@ local classBuilder do
 
 		function ClassBuilder:BuildDestructor()
 			local class = self.Class
-			
+
 			local thisDestructor = rawget(class, CLASS_DESTRUCTOR)
 			if thisDestructor then
 				table.insert(self.Destructors, thisDestructor)
 			end
-			
+
 			local finalDestructor
-			
+
 			local destructors = self.Destructors
 			if #destructors > 1 then
 
@@ -807,7 +738,7 @@ local classBuilder do
 			else
 				finalDestructor = emptyFunction
 			end
-			
+
 			rawset(class, CLASS_DESTRUCTOR, finalDestructor)
 		end
 
@@ -864,11 +795,6 @@ local classBuilder do
 					Handler = pureVirtualHandler,
 				},
 
-				[AttributeType.Singleton] = {
-					ApplyType = AttributeApplyType.Class,
-					Handler = nil,
-				},
-
 				[AttributeType.NoFreeze] = {
 					ApplyType = AttributeApplyType.Class,
 					Handler = nil,
@@ -914,7 +840,6 @@ local classBuilder do
 
 			self:HandleAttribute(attributeArgs, value)
 
-			-- TODO: may be unsafe
 			rawset(self.Class, fieldName, nil)
 		end
 
@@ -953,24 +878,9 @@ local classBuilder do
 			rawset(class, CLASS_OWN_MEMBERS, self.VtMembers)
 			rawset(class, CLASS_VTMEMBER_OVERRIDES, {})
 			rawset(class, CLASS_TYPENAME, self.ClassName)
-			rawset(class, CLASS_ID, classId)
+			rawset(class, CLASS_ID, self.ClassIdCounter)
 			rawset(class, CLASS_MEMBER_ATTRIBUTES, self.MemberAttributes)
 			rawset(class, CLASS_ATTRIBUTES, self.ClassAttributes)
-		end
-
-		function ClassBuilder:HandleSingleton()
-			if self.HasClassAttribute(self.Class, AttributeType.Singleton) then
-				local instance
-				local creator = self.ObjectCreator
-				self.ObjectCreator = function(...)
-					if instance then
-						return instance
-					end
-
-					instance = creator(...)
-					return instance
-				end
-			end
 		end
 
 		function ClassBuilder:Build(className, class, ...)
@@ -989,11 +899,19 @@ local classBuilder do
 			self:InitAndValidateInheritance(...)
 			self:SetIndex()
 			self:ProcessInheritance()
-			self:HandleDebugAndInitialObjectCreators()
+			self:HandleObjectCreators()
+			self:HandleDebug()
 			self:BuildDestructor()
-			self:HandleSingleton()
-
+			
 			class[CLASS_OBJECT_CREATOR] = self.ObjectCreator
+			
+			self:RegisterBuiltClass()
+		end
+		
+		function ClassBuilder:RegisterBuiltClass()
+			classToIdMap[self.Class] = self.ClassIdCounter
+			classToNameMap[self.Class] = self.ClassName
+			self.ClassIdCounter += 1
 		end
 	end
 
@@ -1026,6 +944,24 @@ local function getallnodesize(t)
 	return size
 end
 
+local function getrawclassid(class)
+	return classToIdMap[class]
+end
+
+local function getrawclassname(class)
+	return classToNameMap[class]
+end
+
+local function getclassid(instance)
+	local class = getmetatable(instance)
+	return getrawclassid(class)
+end
+
+local function getclassname(instance)
+	local class = getmetatable(instance)
+	return getrawclassname(class)
+end
+
 buildclass("DuskObject", DuskObject)
 
 local library = {}
@@ -1049,20 +985,12 @@ library.writebit = writebit
 
 library.assertf = assertf
 library.expecttype = expecttype
-library.expecttype2 = expecttype2
-library.expecttype3 = expecttype3
-library.expecttype4 = expecttype4
-library.expecttype5 = expecttype5
 library.expectrbxtype = expectrbxtype
 library.expectclass = expectclass
 library.expectclasstyperaw = expectclasstyperaw
 library.expectclasstype = expectclasstype
 
 library.istype = istype
-library.istype2 = istype2
-library.istype3 = istype3
-library.istype4 = istype4
-library.istype5 = istype5
 library.isprimitive = isprimitive
 library.iscclosure = iscclosure
 library.islclosure = islclosure
@@ -1072,5 +1000,10 @@ library.isclasstype = isclasstype
 library.isclass = isclass
 
 library.buildclass = buildclass
+
+library.getrawclassid = getrawclassid
+library.getrawclassname = getrawclassname
+library.getclassid = getclassid
+library.getclassname = getclassname
 
 return library

@@ -343,8 +343,6 @@ end
 
 local Kernel = {} do
 
-	Kernel.__attr_singleton = true
-
 	function Kernel:constructor()
 		local rootFolder = shared.rootFolder
 		self._PackageManager = PackageManager.new(rootFolder[CLASSES_FODLER_NAME])
@@ -367,7 +365,7 @@ local Kernel = {} do
 	function Kernel:GetClass(name)
 		return expectclasstype(self._PackageManager:GetClass(name, 1), name)
 	end
-	
+
 	function Kernel:GetLocalClass(name)
 		return expectclasstype(self._PackageManager:GetLocalClass(name, 1), name)
 	end
