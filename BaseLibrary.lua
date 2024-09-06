@@ -35,14 +35,27 @@ local function istype(value, ...)
 	return istype_handler(type(value), ...)
 end
 
-local function getcallstacksize()
-	local size = 2
+local function getcallstacksize(step)
+	step = step or 1000
+	local low = 2
+	local high = low + step
+	local mid
 
-	while debug.info(size, "f") do
-		size += 1
+	while debug.info(high, "f") do
+		low = high
+		high += step
 	end
 
-	return size - 2
+	while low <= high do
+		mid = math.ceil((low + high) / 2)
+		if debug.info(mid, "f") then
+			low = mid + 1
+		else
+			high = mid - 1
+		end
+	end
+
+	return high - 1
 end
 
 local CLASS_OWN_MEMBERS = "__members"
@@ -430,6 +443,8 @@ end
 
 local emptyFunction = function()end
 
+local classBuilder
+
 local methodLinker do
 
 	local MethodLinker = {} do
@@ -456,16 +471,6 @@ local methodLinker do
 			self.MethodToImplementation[method] = implementation
 		end
 		
-		function MethodLinker:RemoveBuildInfo(class)
-			if not (debugModeEnabled or kernelSettings.SelfArgumentValidationInConstructors) then
-				rawset(class, CLASS_BASE, nil)
-			end
-			
-			rawset(class, CLASS_OWN_MEMBERS, nil)
-			rawset(class, CLASS_MEMBER_ATTRIBUTES, nil)
-			rawset(class, CLASS_ATTRIBUTES, nil)
-		end
-		
 		function MethodLinker:Finalize()
 			local methodToImplementation = self.MethodToImplementation
 			if not next(methodToImplementation) then return end
@@ -480,10 +485,12 @@ local methodLinker do
 					local implementation = methodToImplementation[method]
 					if not implementation then continue end
 					
-					if implementation == emptyFunction then
+					if implementation == emptyFunction and
+						not classBuilder.HasMemberAttribute(class, methodName, AttributeType.PureVirtual)
+					then
 						unresolvedMethodImplementation = true
 						
-						warnf("unresolved method implementation of '%s.%s' (%s)",
+						warnf("unresolved method implementation of %s",
 							getFullDebugInfo(class, methodName))
 						
 						continue
@@ -495,7 +502,7 @@ local methodLinker do
 				local hasNoFreeze = hasClassAttribute(class, AttributeType.NoFreeze)
 				
 				if not debugModeEnabled then
-					self:RemoveBuildInfo(class)
+					classBuilder.RemoveBuildInfo(class)
 				end
 				
 				if not hasNoFreeze then
@@ -520,7 +527,7 @@ local methodLinker do
 	methodLinker = MethodLinker.new()
 end
 
-local classBuilder do
+do -- classBuilder
 
 	local alwaysInheritDuskObject = kernelSettings.AlwaysInheritDuskObject
 	local logClassBuildingProcess = kernelSettings.LogClassBuildingProcess
@@ -565,27 +572,27 @@ local classBuilder do
 			return self
 		end
 
-		function ClassBuilder.IsMemberVirtual_attributes(attributes, memberName)
+		function ClassBuilder.HasClassAttribute(class, name)
+			return rawget(class, CLASS_ATTRIBUTES)[name]
+		end
+
+		function ClassBuilder.HasMemberAttribute_attributes(attributes, memberName, type)
 			local memberAttributes = attributes[memberName]
 
 			if not memberAttributes then
 				return false
 			end
 
-			return memberAttributes[AttributeType.Virtual]
+			return memberAttributes[type]
 		end
-		
-		function ClassBuilder.IsMemberVirtual(class, memberName)
+
+		function ClassBuilder.HasMemberAttribute(class, memberName, type)
 			local attributes = rawget(class, CLASS_MEMBER_ATTRIBUTES)
 			if not attributes then
 				return false
 			end
-			
-			return ClassBuilder.IsMemberVirtual_attributes(attributes, memberName)
-		end
 
-		function ClassBuilder.HasClassAttribute(class, name)
-			return rawget(class, CLASS_ATTRIBUTES)[name]
+			return ClassBuilder.HasMemberAttribute_attributes(attributes, memberName, type)
 		end
 
 		function ClassBuilder:SetIndex()
@@ -656,7 +663,7 @@ local classBuilder do
 						continue
 					end
 					
-					if self.IsMemberVirtual(baseClass, memberName) then
+					if self.HasMemberAttribute(baseClass, memberName, AttributeType.Virtual) then
 						inheritedVirtualMethods[memberName] = true
 					end
 
@@ -1010,8 +1017,10 @@ local classBuilder do
 				if isAttribute(name) then
 					self:HandleAttributeField(name, memberOrValue)
 				else
-
-					if not self.IsMemberVirtual_attributes(self.MemberAttributes, name) then
+					
+					if not self.HasMemberAttribute_attributes(self.MemberAttributes,
+						name, AttributeType.Virtual)
+					then
 						ownMembers[name] = memberOrValue
 					end
 					
@@ -1019,7 +1028,7 @@ local classBuilder do
 			end
 		end
 
-		function ClassBuilder:AssignClassCoreComponents()
+		function ClassBuilder:AssignClassBuildInfo()
 			local class = self.Class
 			rawset(class, CLASS_OWN_MEMBERS, self.OwnMembers)
 			rawset(class, CLASS_TYPENAME, self.ClassName)
@@ -1028,6 +1037,16 @@ local classBuilder do
 			rawset(class, CLASS_ATTRIBUTES, self.ClassAttributes)
 		end
 
+		function ClassBuilder.RemoveBuildInfo(class)
+			if not (debugModeEnabled or kernelSettings.SelfArgumentValidationInConstructors) then
+				rawset(class, CLASS_BASE, nil)
+			end
+
+			rawset(class, CLASS_OWN_MEMBERS, nil)
+			rawset(class, CLASS_MEMBER_ATTRIBUTES, nil)
+			rawset(class, CLASS_ATTRIBUTES, nil)
+		end
+		
 		function ClassBuilder:Build(className, class, ...)
 			self.Class = class
 			self.ClassName = className
@@ -1040,7 +1059,7 @@ local classBuilder do
 			self.ObjectCreator = emptyFunction
 
 			self:HandleMembers()
-			self:AssignClassCoreComponents()
+			self:AssignClassBuildInfo()
 			self:InitAndValidateInheritance(...)
 			self:SetIndex()
 			self:ProcessInheritance()

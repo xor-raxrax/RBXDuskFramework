@@ -9,7 +9,7 @@ end
 
 -- getclassid must be at the end of chain
 function MyClass:constructor(...)
-	MyBaseClass.constructor(self, getclassid(MyClass))
+	MyBaseClass.constructor(self, getclassid(MyClass), ...)
 end
 --]]
 
