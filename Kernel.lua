@@ -5,10 +5,9 @@ local buildclass = baseLibrary.buildclass
 local errorf = baseLibrary.errorf
 local assertf = baseLibrary.assertf
 local expecttype = baseLibrary.expecttype
+local expectrbxtype = baseLibrary.expectrbxtype
 
 local ENUMS_MODULE_NAME = "Enums"
-local CLASSES_FODLER_NAME = "Classes"
-local LIBRARIES_FOLDER_NAME = "Libraries"
 
 local IMPLEMENTATION_MODULE_EXTENSION = "impl"
 
@@ -86,7 +85,6 @@ local LibraryCollector = {} do
 			if not file:IsA("ModuleScript") then continue end
 			
 			self:AddModule(file.Name, Module.new(file))
-			self:_RegisterLibrary(file)
 		end
 	end
 	
@@ -259,14 +257,13 @@ end
 
 local PackageManager = {} do
 
-	function PackageManager:constructor(rootFolder)
+	function PackageManager:constructor(rootFolder, mainScript)
 		self.Packages = {}
 		self.Classes = {}
 		self.Enums = {}
-		
-		self.RootFolder = rootFolder
+
 		self.RootFolderName = rootFolder.Name
-		self.RootFolderParentName = rootFolder.Parent.Name
+		self.MainScriptName = mainScript.Name
 		self.RootPackage = nil
 	end
 	
@@ -288,7 +285,7 @@ local PackageManager = {} do
 		return classModule:GetReturnValueAsClass()
 	end
 
-	function PackageManager:GetEnums(fullName : string)
+	function PackageManager:GetEnum(fullName : string)
 		local enums = self.Enums[fullName]
 		if not enums then
 			errorf("'%s' is invalid enums full name", fullName)
@@ -297,7 +294,7 @@ local PackageManager = {} do
 	end
 	
 	function PackageManager:BuildPackage(folder, name, prefixName)
-		expecttype(folder, "userdata")
+		expectrbxtype(folder, "Instance")
 		expecttype(name, "string")
 		expecttype(prefixName, "string")
 		local package = Package.new(self, folder, name, prefixName)
@@ -321,7 +318,7 @@ local PackageManager = {} do
 		expecttype(name, "string")
 		expecttype(localClassTraceOffset, "number")
 
-		local success, packageOrTrace = self:_GetLocalPackage(localClassTraceOffset)
+		local success, packageOrTrace = self:_GetLocalPackage(localClassTraceOffset + 1)
 		if not success then
 			errorf("cannot extract package name from trace '%s'", packageOrTrace)
 		end
@@ -342,9 +339,7 @@ local PackageManager = {} do
 	end
 
 	function PackageManager:_GetLocalPackage(localClassTraceOffset)
-		local rootFolder = self.RootFolder
 		local rootFolderName = self.RootFolderName
-		local rootFolderParentName = self.RootFolderParentName
 		
 		local trace = debug.traceback("", 2 + localClassTraceOffset)
 
@@ -355,17 +350,19 @@ local PackageManager = {} do
 		for substring in string.gmatch(lastLine, "[^.]+") do
 			table.insert(names, substring)
 		end
-
+		
+		local scriptName = string.match(names[#names], "(.*):%d+$")
+		if scriptName and scriptName == self.MainScriptName then
+			return true, self.RootPackage
+		end
+		
 		-- last line is running class
 		table.remove(names)
 
 		for i = #names, 1, -1 do
 			local potentialPackageName = names[i]
 
-			local isRootFolder = potentialPackageName == rootFolderName
-				and names[i - 1] and names[i - 1] == rootFolderParentName
-
-			if isRootFolder then
+			if potentialPackageName == rootFolderName then
 				return true, self.RootPackage
 			end
 
@@ -383,35 +380,48 @@ end
 
 local Kernel = {} do
 
-	function Kernel:constructor(rootFolder)
-		self._PackageManager = PackageManager.new(rootFolder)
+	function Kernel:constructor(
+		classesFolder : Instance,
+		librariesFolder : Instance,
+		mainScript : ModuleScript
+	)
+		expectrbxtype(classesFolder, "Instance")
+		expectrbxtype(librariesFolder, "Instance")
+		expectrbxtype(mainScript, "Instance")
+		
+		self._PackageManager = PackageManager.new(classesFolder, mainScript)
 		self._LibrariesCollector = LibraryCollector.new()
 
-		self._LibrariesCollector:Collect(rootFolder[LIBRARIES_FOLDER_NAME])
+		self._LibrariesCollector:Collect(librariesFolder)
 		
-		local rootPackage = self._PackageManager:BuildPackage(rootFolder[CLASSES_FODLER_NAME], "", "")
+		local rootPackage = self._PackageManager:BuildPackage(classesFolder, "", "")
 		self._PackageManager.RootPackage = rootPackage
 	end
 
 	local expectclasstype = baseLibrary.expectclasstype
 
 	function Kernel:GetClass(fullName : string)
+		expecttype(fullName, "string")
 		return self._PackageManager:GetClass(fullName)
 	end
 
 	function Kernel:GetLocalClass(name : string)
+		expecttype(name, "string")
 		return expectclasstype(self._PackageManager:GetLocalClass(name, 1, false), name)
 	end
 
 	function Kernel:GetLibrary(name : string)
-		return self._LibrariesCollector:_GetModuleReturnValue(name)
+		expecttype(name, "string")
+		return self._LibrariesCollector:GetLibrary(name):GetReturnValue()
 	end
 
-	function Kernel:GetEnum(name : string)
-		return self._PackageManager:GetEnum(name)
+	function Kernel:GetEnum(fullName : string)
+		expecttype(fullName, "string")
+		return self._PackageManager:GetEnum(fullName)
 	end
 
 	function Kernel:GetLocalEnum(name : string)
+		expecttype(name, "string")
 		return self._PackageManager:GetLocalEnum(name, 1)
 	end
 	
