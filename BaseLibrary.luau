@@ -1,5 +1,5 @@
 local kernelSettings = require(script.Parent.KernelSettings)
-local debugModeEnabled = kernelSettings.DebugMode.Enabled
+local debugModeEnabled = kernelSettings.DebugMode and kernelSettings.DebugMode.Enabled
 
 -- reflection
 
