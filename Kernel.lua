@@ -14,11 +14,11 @@ local IMPLEMENTATION_MODULE_EXTENSION = "impl"
 local function createFullName(namePrefix : string, name : string)
 	expecttype(namePrefix, "string")
 	expecttype(name, "string")
-	
+
 	if namePrefix == "" then
 		return name
 	end
-	
+
 	return namePrefix .. '.' .. name
 end
 
@@ -53,7 +53,7 @@ local ModuleCollector = {} do
 
 	ModuleCollector.__attr_purevirtual_Collect = true
 	function ModuleCollector:Collect(root : Instance)
-		
+
 	end
 
 	function ModuleCollector:AddModule(name : string, module)
@@ -65,29 +65,29 @@ local ModuleCollector = {} do
 				module:GetFullName()
 			)
 		end
-		
+
 		self.CollectedModules[name] = module
 	end
-	
+
 	buildclass("ModuleCollector", ModuleCollector)
 end
 
 local LibraryCollector = {} do
-	
+
 	LibraryCollector.__base = { ModuleCollector }
-	
+
 	function LibraryCollector:constructor()
 		ModuleCollector.constructor(self)
 	end
-	
+
 	function LibraryCollector:Collect(rootFolder : Instance)
 		for _, file in next, rootFolder:GetDescendants() do
 			if not file:IsA("ModuleScript") then continue end
-			
+
 			self:AddModule(file.Name, Module.new(file))
 		end
 	end
-	
+
 	function LibraryCollector:GetLibrary(name : string)
 		local module = self.CollectedModules[name]
 		if not module then
@@ -95,14 +95,14 @@ local LibraryCollector = {} do
 		end
 		return module
 	end
-	
+
 	buildclass("LibraryCollector", LibraryCollector)
 end
 
 local ClassModule = {} do
-	
+
 	ClassModule.__base = { Module }
-	
+
 	function ClassModule:constructor(module : ModuleScript, fullName : string)
 		Module.constructor(self, module)
 		expecttype(fullName, "string")
@@ -124,9 +124,9 @@ local ClassModule = {} do
 end
 
 local Package = {} do
-	
+
 	Package.__base = { ModuleCollector }
-	
+
 	function Package:constructor(packageManager, folder, name, prefixName)
 		local fullName = createFullName(prefixName, name)
 		ModuleCollector.constructor(self)
@@ -135,7 +135,7 @@ local Package = {} do
 		self.FullName = fullName
 		self.Folder = folder
 		self.Enums = nil
-		
+
 		self._PackageManager = packageManager
 		self._EnumsModule = nil
 		self._ModuleNameToImplementation = {}
@@ -159,10 +159,10 @@ local Package = {} do
 		if not enum then
 			errorf("'%s' is invalid enum name", name)
 		end
-		
+
 		return enum
 	end
-	
+
 	local initializeEnums do
 		local invalidIndexHandler = {}
 		function invalidIndexHandler:__index(name)
@@ -201,7 +201,7 @@ local Package = {} do
 		self.Enums = enums
 		self._EnumsModule = enumsModule
 	end
-	
+
 	function Package:RegisterClass(child)
 		local fileName = child.Name
 		local moduleName, extension = string.match(fileName, "(.+)%.([^%.]+)$")
@@ -215,7 +215,7 @@ local Package = {} do
 			self._PackageManager:RegisterClass(fullName, module)
 		end
 	end
-	
+
 	function Package:RegisterSubPackage(package)
 		if self._Packages[package.Name] then
 			errorf("Duplicate package '%s' in '%s', at '%s'",
@@ -224,22 +224,23 @@ local Package = {} do
 				package.Folder:GetFullName()
 			)
 		end
-		
+
 		self._Packages[package.Name] = package
 	end
-	
+
 	function Package:Collect(root)
 		for _, child in next, root:GetChildren() do
 			if child:IsA("Folder") then
 				local package = self._PackageManager:BuildPackage(child, child.Name, self.FullName)
+				package:Collect(child)
 				self:RegisterSubPackage(package)
 				continue
 			end
-			
+
 			if child:IsA("ModuleScript") then
-				
+
 				local fileName = child.Name
-				
+
 				if child.Name == ENUMS_MODULE_NAME then
 					self:RegisterEnums(child)
 				else
@@ -248,7 +249,7 @@ local Package = {} do
 
 				self:Collect(child)
 			end
-			
+
 		end
 	end
 
@@ -257,16 +258,21 @@ end
 
 local PackageManager = {} do
 
-	function PackageManager:constructor(rootFolder, mainScript)
+	function PackageManager:constructor(classesFolders, mainScript)
 		self.Packages = {}
 		self.Classes = {}
 		self.Enums = {}
-
-		self.RootFolderName = rootFolder.Name
+		
+		local rootFolderNames = {}
+		for _, folder in next, classesFolders do
+			rootFolderNames[folder.Name] = 1
+		end
+		
+		self.RootFolderNames = rootFolderNames
 		self.MainScriptName = mainScript.Name
 		self.RootPackage = nil
 	end
-	
+
 	function PackageManager:RegisterClass(fullName : string, module)
 		self.Classes[fullName] = module
 	end
@@ -292,15 +298,20 @@ local PackageManager = {} do
 		end
 		return enums
 	end
-	
+
 	function PackageManager:BuildPackage(folder, name, prefixName)
 		expectrbxtype(folder, "Instance")
 		expecttype(name, "string")
 		expecttype(prefixName, "string")
 		local package = Package.new(self, folder, name, prefixName)
-		package:Collect(folder)
 		self.Packages[name] = package
 		return package
+	end
+	
+	function PackageManager:BuildRootPackage(folder)
+		local root = self:BuildPackage(folder, "", "")
+		self.RootPackage = root
+		return root
 	end
 	
 	function PackageManager:GetPackage(name, noThrow)
@@ -339,8 +350,8 @@ local PackageManager = {} do
 	end
 
 	function PackageManager:_GetLocalPackage(localClassTraceOffset)
-		local rootFolderName = self.RootFolderName
-		
+		local rootFolderNames = self.RootFolderNames
+
 		local trace = debug.traceback("", 2 + localClassTraceOffset)
 
 		local lastLine = string.match(trace, "[^\n]+%s*$")
@@ -350,20 +361,22 @@ local PackageManager = {} do
 		for substring in string.gmatch(lastLine, "[^.]+") do
 			table.insert(names, substring)
 		end
-		
+
 		local scriptName = string.match(names[#names], "(.*):%d+$")
 		if scriptName and scriptName == self.MainScriptName then
 			return true, self.RootPackage
 		end
-		
+
 		-- last line is running class
 		table.remove(names)
 
 		for i = #names, 1, -1 do
 			local potentialPackageName = names[i]
-
-			if potentialPackageName == rootFolderName then
-				return true, self.RootPackage
+			
+			for rootName in next, rootFolderNames do
+				if potentialPackageName == rootName then
+					return true, self.RootPackage
+				end 
 			end
 
 			local package = self:GetPackage(potentialPackageName, true)
@@ -381,21 +394,35 @@ end
 local Kernel = {} do
 
 	function Kernel:constructor(
-		classesFolder : Instance,
-		librariesFolder : Instance,
+		classesFolders : {Instance},
+		librariesFolders : {Instance},
 		mainScript : ModuleScript
 	)
-		expectrbxtype(classesFolder, "Instance")
-		expectrbxtype(librariesFolder, "Instance")
+		expectrbxtype(classesFolders, "table")
+		expectrbxtype(librariesFolders, "table")
 		expectrbxtype(mainScript, "Instance")
 		
-		self._PackageManager = PackageManager.new(classesFolder, mainScript)
-		self._LibrariesCollector = LibraryCollector.new()
+		local libraryCollector = LibraryCollector.new()
+		local packageManager = PackageManager.new(classesFolders, mainScript)
 
-		self._LibrariesCollector:Collect(librariesFolder)
+		self._PackageManager = packageManager
+		self._LibrariesCollector = libraryCollector
+
+		local _, firstRootPackageContainer = next(classesFolders)
+		expectrbxtype(firstRootPackageContainer, "Instance")
+
+		local rootPackage = packageManager:BuildRootPackage(firstRootPackageContainer)
+
+		for _, classFolder in next, classesFolders do
+			expectrbxtype(classFolder, "Instance")
+			rootPackage:Collect(classFolder)
+		end
 		
-		local rootPackage = self._PackageManager:BuildPackage(classesFolder, "", "")
-		self._PackageManager.RootPackage = rootPackage
+		for _, libraryFolder in next, librariesFolders do
+			expectrbxtype(libraryFolder, "Instance")
+			libraryCollector:Collect(libraryFolder)
+		end
+		
 	end
 
 	local expectclasstype = baseLibrary.expectclasstype
@@ -424,7 +451,7 @@ local Kernel = {} do
 		expecttype(name, "string")
 		return self._PackageManager:GetLocalEnum(name, 1)
 	end
-	
+
 	function Kernel:FinalizeClasses()
 		for packageName, package in next, self._PackageManager.Packages do
 
@@ -433,16 +460,16 @@ local Kernel = {} do
 				baseLibrary.__registerimplementation(class, require(implementationModule))
 			end
 		end
-		
+
 		baseLibrary.__linkimplementations()
 		baseLibrary.__linkimplementations = nil
 		baseLibrary.__registerimplementation = nil
 	end
-	
+
 	function Kernel:GetBaseLibrary()
 		return baseLibrary
 	end
-	
+
 	buildclass("Kernel", Kernel)
 end
 

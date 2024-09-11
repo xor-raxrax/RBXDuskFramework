@@ -19,20 +19,63 @@ local function isprimitive(value)
 		or value == nil
 end
 
-local function istype_handler(myType : string, expectedType : string, ... : string)
-	if myType == expectedType then
+local function compare<T>(what : T, t0 : T?, t1 : T?,
+	t2 : T?, t3 : T?, t4 : T?, t5 : T?, ... : T?
+)
+	if what == t0 then
 		return true
 	end
 	
-	if select('#', ...) > 0 then
-		return istype_handler(myType, ...)
+	if t1 then
+		if what == t1 then
+			return true
+		end
+
+		if t2 then
+			if what == t2 then
+				return true
+			end
+
+			if t3 then
+				if what == t3 then
+					return true
+				end
+
+				if t4 then
+					if what == t4 then
+						return true
+					end
+
+					if t5 then
+						if what == t5 then
+							return true
+						end
+					end
+					
+					return compare(what, ...)
+				end
+			end
+		end
+		
 	end
 	
 	return false
 end
 
+local function istype_handler(myType : string, expectedType : string, ... : string)
+	if myType == expectedType then
+		return true
+	end
+
+	if select('#', ...) > 0 then
+		return istype_handler(myType, ...)
+	end
+
+	return false
+end
+
 local function istype(value, ...)
-	return istype_handler(type(value), ...)
+	return compare(type(value), ...)
 end
 
 local function getcallstacksize(step)
@@ -295,16 +338,16 @@ end
 
 local function expecttype(value, expectedType, ...)
 	local myType = type(value)
-	if not istype_handler(myType, expectedType, ...) then
-		errorf("<%s> expected, got <%s>", expectedType, myType)
+	if not compare(myType, expectedType, ...) then
+		errorf("'%s' expected, got '%s'", expectedType, myType)
 	end
 	return value
 end
 
 local function expectrbxtype(value, expectedType, ...)
 	local myType = typeof(value)
-	if not istype_handler(myType, expectedType, ...) then
-		errorf("<%s> expected, got <%s>", expectedType, myType)
+	if not compare(myType, expectedType, ...) then
+		errorf("'%s' expected, got '%s'", expectedType, myType)
 	end
 	return value
 end
@@ -317,7 +360,7 @@ end
 
 local function expectclasstyperaw(class, expectedType)
 	if class[CLASS_TYPENAME] ~= expectedType then
-		errorf("<%s> expected, got <%s>", expectedType, class[CLASS_TYPENAME])
+		errorf("'%s' expected, got '%s'", expectedType, class[CLASS_TYPENAME])
 	end
 	return class
 end
@@ -356,25 +399,60 @@ local function hasClassAttribute(class, name)
 	return rawget(class, CLASS_ATTRIBUTES)[name]
 end
 
+
+local classToIdMap = {}
+local classToNameMap = {}
+do
+
+	local invalidIndexHandler = {}
+	function invalidIndexHandler:__index(class)
+		errorf("Passed class '%s' is not registered in class map", tostring(rawget(class, CLASS_TYPENAME)))
+	end
+
+	setmetatable(classToIdMap, invalidIndexHandler)
+	setmetatable(classToNameMap, invalidIndexHandler)
+end
+
+local function getrawclassid(class)
+	return classToIdMap[class]
+end
+
+local function getrawclassname(class)
+	return classToNameMap[class]
+end
+
+local function getclassid(instance)
+	local class = getmetatable(instance)
+	return getrawclassid(class)
+end
+
+local function getclassname(instance)
+	local class = getmetatable(instance)
+	return getrawclassname(class)
+end
+
+
 local DuskObject = {} do
+	
+	local informerSettings = kernelSettings.ClassInstanceCleanup
+	
+	if informerSettings.Enabled then
 
-	if kernelSettings.ClassInstanceCleanupInformer.Enabled then
+		local InformUseError = informerSettings.InformUseError
 
-		local useError = kernelSettings.ClassInstanceCleanupInformer.UseError
-
-		local informAliveThread = kernelSettings.InformAliveThread
-		local informAliveRBXScriptConnection = kernelSettings.InformAliveRBXScriptConnection
-		local informRBXInstance = kernelSettings.InformRBXInstance
+		local informAliveThread = informerSettings.InformAliveThread
+		local informAliveRBXScriptConnection = informerSettings.InformAliveRBXScriptConnection
+		local informRBXInstance = informerSettings.InformRBXInstance
 
 		local function inform(fieldSymbol, value, message)
 			local formatted = string.format("%s = %s (%s)", tostring(fieldSymbol), tostring(value), message)
-			if useError then
+			if InformUseError then
 				error(formatted, 4)
 			else
 				warn(debug.traceback(formatted, 4))
 			end
 		end
-
+		
 		local function validate(name, value)
 			local vtype = typeof(value)
 
@@ -389,36 +467,56 @@ local DuskObject = {} do
 				end
 
 			elseif informRBXInstance and vtype == "Instance" then
-				inform(name, value, "Intance reference; possible dangling Instance; non-gced reference from lua or any alive RBXScriptConnection associated with this instance will prevent RBXIntance cleanup (only Instance:Destroy() disconnects all alive RBXScriptConnections)")
+				inform(name, value, "Intance reference; possible dangling Instance")
 
 			end
 		end
+		
+		local actionBlocker = {} do
 
+			function actionBlocker:__index(k)
+				warn("object is deleted", self)
+				errorf("attempt to index deleted object with '%s'", tostring(k))
+			end
+			
+			function actionBlocker:__newindex(k, v)
+				warn("object is deleted", self)
+				errorf("attempt to assign to deleted object with index '%s'", tostring(k))
+			end
+			
+			local function operationError(self)
+				warn("object is deleted", self)
+				error("attempt to perform operation with deleted object")
+			end
+		end
+
+		local clearAndBlock = informerSettings.ClearAndBlock
 		function DuskObject:Destroy()
 			local classType = self.__type .. "."
 			for field, item in next, self do
 				validate(classType .. "<field>", field)
 				validate(classType .. field, item)
 			end
+			
+			if clearAndBlock then
+				local myClass = getmetatable(self)
+
+				local copy = table.clone(self)
+				table.clear(self)
+
+				self.__info_objectCopy = copy
+				self.__info_className = getrawclassname(myClass)
+				self.__info_classId = getrawclassid(myClass)
+				self.__info_class = myClass
+				
+				setmetatable(self, actionBlocker)
+			end
 		end
 
 	end
 
 end
 
-
-local classToIdMap = {}
-local classToNameMap = {}
-do
-
-	local invalidIndexHandler = {}
-	function invalidIndexHandler:__index(class)
-		errorf("Passed class '%s' is not registered in class map", tostring(rawget(class, CLASS_TYPENAME)))
-	end
-
-	setmetatable(classToIdMap, invalidIndexHandler)
-	setmetatable(classToNameMap, invalidIndexHandler)
-end
 
 local function iterateClassMethods(class)
 	local function iterator(class, memberName, member)
@@ -470,60 +568,60 @@ local methodLinker do
 		function MethodLinker:RegisterImplementation(method, implementation)
 			self.MethodToImplementation[method] = implementation
 		end
-		
+
 		function MethodLinker:Finalize()
 			local methodToImplementation = self.MethodToImplementation
 			if not next(methodToImplementation) then return end
-			
+
 			local unresolvedMethodImplementation = false
-			
+
 			for _, class in next, self.Classes do
-				
+
 				for methodName, method in iterateClassMethods(class) do
 					if methodName == "new" then continue end
-					
+
 					local implementation = methodToImplementation[method]
 					if not implementation then continue end
-					
+
 					if implementation == emptyFunction and
 						not classBuilder.HasMemberAttribute(class, methodName, AttributeType.PureVirtual)
 					then
 						unresolvedMethodImplementation = true
-						
+
 						warnf("unresolved method implementation of %s",
 							getFullDebugInfo(class, methodName))
-						
+
 						continue
 					end
-					
+
 					class[methodName] = implementation
 				end
-				
+
 				local hasNoFreeze = hasClassAttribute(class, AttributeType.NoFreeze)
-				
+
 				if not debugModeEnabled then
 					classBuilder.RemoveBuildInfo(class)
 				end
-				
+
 				if not hasNoFreeze then
 					table.freeze(class)
 				end
 			end
-			
+
 			if unresolvedMethodImplementation then
 				error("unresolved method implementation")
 			end
 		end
-		
+
 		function MethodLinker:RegisterClassImplementation(originalClass, implementationClass)
 			for methodName, method in next, implementationClass do
 				local declaredMethod = originalClass[methodName]
 				self.MethodToImplementation[declaredMethod] = method
 			end
 		end
-		
+
 	end
-	
+
 	methodLinker = MethodLinker.new()
 end
 
@@ -533,12 +631,12 @@ do -- classBuilder
 	local logClassBuildingProcess = kernelSettings.LogClassBuildingProcess
 
 	local pureVirtualMethodCallError = kernelSettings.PureVirtualMethodCallError
-	
+
 	local function createPureVirtualMethodHandler(class, memberName)
 		local function pureVirtualMethodHandler(self)
 			local message = string.format("attempt to call pure virtual method %s for class '%s'",
 				getFullDebugInfo(class, memberName), self.__type)
-			
+
 			if pureVirtualMethodCallError then
 				error(message)
 			else
@@ -552,7 +650,7 @@ do -- classBuilder
 	local function isAttribute(name)
 		return string.sub(name, 1, #attributePrefix) == attributePrefix
 	end
-	
+
 	local ClassBuilder = {} do
 		ClassBuilder.__index = ClassBuilder
 
@@ -566,9 +664,9 @@ do -- classBuilder
 			self.ClassAttributes = nil
 			self.OwnMembers = nil
 			self.ClassIdCounter = 0
-			
+
 			self.ClassesWithDeclarations = {}
-			
+
 			return self
 		end
 
@@ -627,10 +725,10 @@ do -- classBuilder
 				end
 
 				if not hasDuskObject then
-					table.insert(allInheritedClasses, DuskObject)
+					table.insert(allInheritedClasses, 1, DuskObject)
 				end
 			end
-
+			
 			return allInheritedClasses
 		end
 
@@ -662,7 +760,7 @@ do -- classBuilder
 						table.insert(self.Destructors, member)
 						continue
 					end
-					
+
 					if self.HasMemberAttribute(baseClass, memberName, AttributeType.Virtual) then
 						inheritedVirtualMethods[memberName] = true
 					end
@@ -703,7 +801,7 @@ do -- classBuilder
 			local class = self.Class
 
 			local constructor = class[CLASS_CONSTRUCTOR] or emptyFunction
-			
+
 			if debugModeEnabled or kernelSettings.SelfArgumentValidationInConstructors then
 
 				local function baseTableClassSearch(baseClasses, classToFind)
@@ -718,11 +816,11 @@ do -- classBuilder
 						end
 					end
 				end
-				
+
 				local originalConstructor = constructor
 				constructor = function(self, ...)
 					expectclass(self)
-					
+
 					-- check if we are calling constructor with self of it's own class or derived one
 					local myClass = getmetatable(self)
 					if getmetatable(self) == class
@@ -736,7 +834,7 @@ do -- classBuilder
 					end
 				end
 			end
-			
+
 			if constructor then
 				self.ObjectCreator = function(...)
 					local object = setmetatable({}, class)
@@ -748,16 +846,16 @@ do -- classBuilder
 					return setmetatable({}, class)
 				end
 			end
-			
+
 			class[CLASS_CONSTRUCTOR] = constructor
 		end
 
 		function ClassBuilder:HandleDebug()
 			if not debugModeEnabled then return end
-			
+
 			local class = self.Class
 			local className = self.ClassName
-			
+
 			local debugModeSettings = kernelSettings.DebugMode
 
 			if debugModeSettings.AddTostringMetamethod then
@@ -775,12 +873,12 @@ do -- classBuilder
 
 				if debugModeSettings.LogCalls then
 					local ignoreSpecialMethodCallLog = debugModeSettings.IgnoreSpecialMethodCallLog
-					
+
 					if ignoreSpecialMethodCallLog
 						and table.find(debugModeSettings.SpecialMethodNames, memberName) then
 						continue
 					end
-					
+
 					local lastFunction = finalMemberFunction
 					finalMemberFunction = function(...)
 						local arguments = ""
@@ -829,7 +927,7 @@ do -- classBuilder
 			end
 
 		end
-		
+
 		function ClassBuilder:InitAndValidateInheritance(...)
 			local class = self.Class
 			local baseClasses = rawget(class, CLASS_BASE)
@@ -857,7 +955,7 @@ do -- classBuilder
 			local finalDestructor
 
 			local destructors = self.Destructors
-			if #destructors > 1 then
+			if #destructors > 0 then
 
 				-- destructor call order is reversed
 				-- derived -> base
@@ -921,11 +1019,11 @@ do -- classBuilder
 				classBuilder.OwnMembers[memberName] = createPureVirtualMethodHandler(classBuilder.Class, memberName)
 				classBuilder:HandleAttribute({AttributeType.Virtual, memberName}, true)
 			end
-			
+
 			local function declarationHandler(classBuilder, memberName)
 				methodLinker:RegisterDeclaration(classBuilder.Class[memberName])
 			end
-			
+
 			attributeInfo = {
 
 				[AttributeType.Virtual] = {
@@ -1012,18 +1110,18 @@ do -- classBuilder
 		function ClassBuilder:HandleMembers(name)
 			local ownMembers = self.OwnMembers
 			local class = self.Class
-			
+
 			for name, memberOrValue in next, class do
 				if isAttribute(name) then
 					self:HandleAttributeField(name, memberOrValue)
 				else
-					
+
 					if not self.HasMemberAttribute_attributes(self.MemberAttributes,
 						name, AttributeType.Virtual)
 					then
 						ownMembers[name] = memberOrValue
 					end
-					
+
 				end
 			end
 		end
@@ -1046,7 +1144,7 @@ do -- classBuilder
 			rawset(class, CLASS_MEMBER_ATTRIBUTES, nil)
 			rawset(class, CLASS_ATTRIBUTES, nil)
 		end
-		
+
 		function ClassBuilder:Build(className, class, ...)
 			self.Class = class
 			self.ClassName = className
@@ -1066,12 +1164,12 @@ do -- classBuilder
 			self:HandleObjectCreators()
 			self:HandleDebug()
 			self:BuildDestructor()
-			
+
 			class[CLASS_OBJECT_CREATOR] = self.ObjectCreator
-			
+
 			self:RegisterBuiltClass()
 		end
-		
+
 		function ClassBuilder:RegisterBuiltClass()
 			classToIdMap[self.Class] = self.ClassIdCounter
 			classToNameMap[self.Class] = self.ClassName
@@ -1082,6 +1180,7 @@ do -- classBuilder
 
 	classBuilder = ClassBuilder.new()
 end
+
 
 local function buildclass(className, class, ...)
 	classBuilder:Build(className, class, ...)
@@ -1110,24 +1209,6 @@ local function getallnodesize(t)
 		size += 1
 	end
 	return size
-end
-
-local function getrawclassid(class)
-	return classToIdMap[class]
-end
-
-local function getrawclassname(class)
-	return classToNameMap[class]
-end
-
-local function getclassid(instance)
-	local class = getmetatable(instance)
-	return getrawclassid(class)
-end
-
-local function getclassname(instance)
-	local class = getmetatable(instance)
-	return getrawclassname(class)
 end
 
 buildclass("DuskObject", DuskObject)
