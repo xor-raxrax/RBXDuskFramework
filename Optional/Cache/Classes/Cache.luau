@@ -1,5 +1,8 @@
 local expecttype = shared.kernel:GetBaseLibrary().expecttype
 
+-- Generic cache container
+-- You would likely need to remove features to refine it for your exact purpose
+
 local Cache = {} do
 	
 	function Cache:constructor(constructor, defaultArguments, expansionSize)
