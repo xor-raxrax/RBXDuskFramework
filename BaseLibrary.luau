@@ -25,7 +25,7 @@ local function compare<T>(what : T, t0 : T?, t1 : T?,
 	if what == t0 then
 		return true
 	end
-	
+
 	if t1 then
 		if what == t1 then
 			return true
@@ -51,14 +51,14 @@ local function compare<T>(what : T, t0 : T?, t1 : T?,
 							return true
 						end
 					end
-					
+
 					return compare(what, ...)
 				end
 			end
 		end
-		
+
 	end
-	
+
 	return false
 end
 
@@ -433,9 +433,9 @@ end
 
 
 local DuskObject = {} do
-	
+
 	local informerSettings = kernelSettings.ClassInstanceCleanup
-	
+
 	if informerSettings.Enabled then
 
 		local InformUseError = informerSettings.InformUseError
@@ -452,7 +452,7 @@ local DuskObject = {} do
 				warn(debug.traceback(formatted, 4))
 			end
 		end
-		
+
 		local function validate(name, value)
 			local vtype = typeof(value)
 
@@ -471,19 +471,19 @@ local DuskObject = {} do
 
 			end
 		end
-		
+
 		local actionBlocker = {} do
 
 			function actionBlocker:__index(k)
 				warn("object is deleted", self)
 				errorf("attempt to index deleted object with '%s'", tostring(k))
 			end
-			
+
 			function actionBlocker:__newindex(k, v)
 				warn("object is deleted", self)
 				errorf("attempt to assign to deleted object with index '%s'", tostring(k))
 			end
-			
+
 			local function operationError(self)
 				warn("object is deleted", self)
 				error("attempt to perform operation with deleted object")
@@ -497,7 +497,7 @@ local DuskObject = {} do
 				validate(classType .. "<field>", field)
 				validate(classType .. field, item)
 			end
-			
+
 			if clearAndBlock then
 				local myClass = getmetatable(self)
 
@@ -508,7 +508,7 @@ local DuskObject = {} do
 				self.__info_className = getrawclassname(myClass)
 				self.__info_classId = getrawclassid(myClass)
 				self.__info_class = myClass
-				
+
 				setmetatable(self, actionBlocker)
 			end
 		end
@@ -702,7 +702,7 @@ do -- classBuilder
 		end
 
 		local function collectInherited(result, currentClass)
-			for _, baseClass in next, currentClass[CLASS_BASE] do
+			for _, baseClass in next, rawget(currentClass, CLASS_BASE) do
 				if table.find(result, baseClass) then continue end
 				collectInherited(result, baseClass)
 				table.insert(result, baseClass)
@@ -728,7 +728,7 @@ do -- classBuilder
 					table.insert(allInheritedClasses, 1, DuskObject)
 				end
 			end
-			
+
 			return allInheritedClasses
 		end
 
@@ -1111,14 +1111,26 @@ do -- classBuilder
 			local ownMembers = self.OwnMembers
 			local class = self.Class
 
-			for name, memberOrValue in next, class do
+			if logClassBuildingProcess then
+				print(self.ClassName, "own members:")
+			end
+
+			local scratch = table.clone(class)
+			for name, memberOrValue in next, scratch do
+				if name == CLASS_BASE then continue end
+
 				if isAttribute(name) then
 					self:HandleAttributeField(name, memberOrValue)
 				else
 
 					if not self.HasMemberAttribute_attributes(self.MemberAttributes,
-						name, AttributeType.Virtual)
+						name, AttributeType.PureVirtualVirtual)
 					then
+
+						if logClassBuildingProcess then
+							print("\t own member", name)
+						end
+
 						ownMembers[name] = memberOrValue
 					end
 
@@ -1213,7 +1225,14 @@ end
 
 buildclass("DuskObject", DuskObject)
 
-local library = {}
+
+local badindexGuard = {}
+function badindexGuard:__index(k)
+	warn("base library content:", self)
+	errorf("base library does not have item '%s'", k)
+end
+
+local library = setmetatable({}, badindexGuard)
 
 library.__linkimplementations = __linkimplementations
 library.__registerimplementation = __registerimplementation
