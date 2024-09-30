@@ -522,20 +522,17 @@ local function iterateClassMethods(class)
 	local function iterator(class, memberName, member)
 		local nextKey, nextValue = next(class, memberName)
 
-		-- Loop through all members
 		while nextKey do
-			-- Check if the member is a function and doesn't start with "__"
 			if type(nextValue) == "function" and string.sub(nextKey, 1, 2) ~= "__" then
 				return nextKey, nextValue
 			end
-			-- Move to the next member
+			
 			nextKey, nextValue = next(class, nextKey)
 		end
 
 		return nil
 	end
 
-	-- Return the iterator function along with the class and starting point (nil)
 	return iterator, class, nil
 end
 
@@ -1215,24 +1212,23 @@ local function writebit(n, index, bit)
 	return bit32.replace(n, bit, index, 1)
 end
 
-local function getallnodesize(t)
-	local size = 0
-	for _ in next, t do
-		size += 1
-	end
-	return size
+local function lerp(min : number, max : number, alpha : number)
+	return min + alpha * (max - min)
+end
+
+local function getalpha(min : number, max : number, num : number)
+	return (num - min) / (max - min)
 end
 
 buildclass("DuskObject", DuskObject)
 
-
-local badindexGuard = {}
-function badindexGuard:__index(k)
+local badIndexGuard = {}
+function badIndexGuard:__index(k)
 	warn("base library content:", self)
 	errorf("base library does not have item '%s'", k)
 end
 
-local library = setmetatable({}, badindexGuard)
+local library = setmetatable({}, badIndexGuard)
 
 library.__linkimplementations = __linkimplementations
 library.__registerimplementation = __registerimplementation
@@ -1247,12 +1243,14 @@ library.printl = printl
 library.warne = warne
 library.warnl = warnl
 
-library.getallnodesize = getallnodesize
 library.removeindex = removeindex
 library.inext = inext
 
 library.readbit = readbit
 library.writebit = writebit
+
+library.lerp = lerp
+library.getalpha = getalpha
 
 library.assertf = assertf
 library.expecttype = expecttype
@@ -1276,5 +1274,7 @@ library.getrawclassid = getrawclassid
 library.getrawclassname = getrawclassname
 library.getclassid = getclassid
 library.getclassname = getclassname
+
+table.freeze(library)
 
 return library

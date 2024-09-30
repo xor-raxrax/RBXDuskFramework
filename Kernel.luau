@@ -404,7 +404,9 @@ local Kernel = {} do
 		
 		local libraryCollector = LibraryCollector.new()
 		local packageManager = PackageManager.new(classesFolders, mainScript)
-
+		
+		self._MainScript = mainScript
+		self._AreClassesFinalized = false
 		self._PackageManager = packageManager
 		self._LibrariesCollector = libraryCollector
 
@@ -422,9 +424,16 @@ local Kernel = {} do
 			expectrbxtype(libraryFolder, "Instance")
 			libraryCollector:Collect(libraryFolder)
 		end
-		
 	end
+	
+	function Kernel:_InvokeMain()
+		require(self._MainScript)
 
+		if not self._AreClassesFinalized then
+			warn("classes are not finalized after running 'Main' module\nwrite 'shared.kernel:FinalizeClasses()' after all your imports")
+		end
+	end
+	
 	local expectclasstype = baseLibrary.expectclasstype
 
 	function Kernel:GetClass(fullName : string)
@@ -453,6 +462,11 @@ local Kernel = {} do
 	end
 
 	function Kernel:FinalizeClasses()
+		if self._AreClassesFinalized then
+			error("classes are already finalized")
+		end
+		
+		self._AreClassesFinalized = true
 		for packageName, package in next, self._PackageManager.Packages do
 
 			for moduleName, implementationModule in next, package._ModuleNameToImplementation do
@@ -462,8 +476,6 @@ local Kernel = {} do
 		end
 
 		baseLibrary.__linkimplementations()
-		baseLibrary.__linkimplementations = nil
-		baseLibrary.__registerimplementation = nil
 	end
 
 	function Kernel:GetBaseLibrary()
