@@ -12,11 +12,12 @@ local kernelSettings = {
 		Enabled = true,
 		ClearAndBlock = true,
 		
-		InformUseError = false,
+		InformUseErrorInsteadOfWarn = false,
 		InformAliveThread = false,
 		InformAliveRBXScriptConnection = false,
 		InformRBXInstance = false,
 	},
+	
 }
 
 return kernelSettings

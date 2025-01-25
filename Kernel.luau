@@ -256,6 +256,72 @@ local Package = {} do
 	buildclass("Package", Package)
 end
 
+local findSimilarFields do
+	
+	local THRESHOLD = 2
+	local PRIMARY_RESULTS_SIZE = 5
+	
+	local function longestCommonSubstring(a: string, b: string)
+		local maxLength = 0
+		local endPos = 0
+		local commonSubstringMatrix = table.create(#a)
+
+		-- Initialize the matrix
+		for i = 0, #a do
+			commonSubstringMatrix[i] = {}
+		end
+
+		-- Populate the matrix and track the longest common substring
+		for i = 1, #a do
+			for j = 1, #b do
+				if string.sub(a, i, i) == string.sub(b, j, j) then
+					commonSubstringMatrix[i][j] = (commonSubstringMatrix[i - 1] and commonSubstringMatrix[i - 1][j - 1] or 0) + 1
+					if commonSubstringMatrix[i][j] > maxLength then
+						maxLength = commonSubstringMatrix[i][j]
+						endPos = i
+					end
+				else
+					commonSubstringMatrix[i][j] = 0
+				end
+			end
+		end
+
+		return string.sub(a, endPos - maxLength + 1, endPos), maxLength
+	end
+
+	function findSimilarFields(fullName: string, tableWithFieldsToFind: { [string]: any })
+		local candidates = {}
+
+		for className in next, tableWithFieldsToFind do
+			local commonSubstring, length = longestCommonSubstring(fullName, className)
+			if length > 0 then
+				table.insert(candidates, {
+					name = className,
+					substring = commonSubstring,
+					length = length
+				})
+			end
+		end
+
+		table.sort(candidates, function(a, b)
+			return a.length > b.length
+		end)
+
+		local primary = {}
+		local secondary = {}
+		for index, candidate in next, candidates do
+			if candidate.length >= THRESHOLD then
+				if #primary < PRIMARY_RESULTS_SIZE then
+					table.insert(primary, candidate.name)
+				end
+			end
+		end
+
+		return primary, secondary
+	end
+	
+end
+
 local PackageManager = {} do
 
 	function PackageManager:constructor(classesFolders, mainScript)
@@ -282,19 +348,45 @@ local PackageManager = {} do
 			self.Enums[createFullName(packageName, enumName)] = enum
 		end
 	end
-
-	function PackageManager:GetClass(fullName : string)
+	
+	-- ".class" aka "relative path" syntax support
+	function PackageManager:PathToFullName(path : string, localClassTraceOffset)
+		if string.sub(path, 1, 1) ~= '.' then
+			return path
+		end
+		
+		local package = self:_GetLocalPackage(localClassTraceOffset + 1)
+		return package.FullName .. path
+	end
+	
+	function PackageManager:GetClass(path : string, localClassTraceOffset)
+		local fullName = self:PathToFullName(path, localClassTraceOffset + 1)
+		
 		local classModule = self.Classes[fullName]
 		if not classModule then
-			errorf("'%s' is invalid class module full name", fullName)
+			local suggestions = findSimilarFields(fullName, self.Classes)
+			if #suggestions > 0 then
+				errorf("'%s' is invalid class module full name. Did you mean one of these?\n%s", 
+					fullName, table.concat(suggestions, ",\n"))
+			else
+				errorf("'%s' is invalid class module full name", fullName)
+			end
 		end
 		return classModule:GetReturnValueAsClass()
 	end
 
-	function PackageManager:GetEnum(fullName : string)
+	function PackageManager:GetEnum(path : string, localClassTraceOffset)
+		local fullName = self:PathToFullName(path, localClassTraceOffset + 1)
+		
 		local enums = self.Enums[fullName]
 		if not enums then
-			errorf("'%s' is invalid enums full name", fullName)
+			local suggestions = findSimilarFields(fullName, self.Enums)
+			if #suggestions > 0 then
+				errorf("'%s' is invalid enums full name. Did you mean one of these?\n%s", 
+					fullName, table.concat(suggestions, ",\n"))
+			else
+				errorf("'%s' is invalid enums full name", fullName)
+			end
 		end
 		return enums
 	end
@@ -324,31 +416,7 @@ local PackageManager = {} do
 			errorf("'%s' is invalid package name", name)
 		end
 	end
-
-	function PackageManager:GetLocalClass(name, localClassTraceOffset)
-		expecttype(name, "string")
-		expecttype(localClassTraceOffset, "number")
-
-		local success, packageOrTrace = self:_GetLocalPackage(localClassTraceOffset + 1)
-		if not success then
-			errorf("cannot extract package name from trace '%s'", packageOrTrace)
-		end
-
-		return packageOrTrace:GetClass(name)
-	end
-
-	function PackageManager:GetLocalEnum(name, localClassTraceOffset)
-		expecttype(name, "string")
-		expecttype(localClassTraceOffset, "number")
-
-		local success, packageOrTrace = self:_GetLocalPackage(localClassTraceOffset + 1)
-		if not success then
-			errorf("cannot extract package name from trace '%s'", packageOrTrace)
-		end
-
-		return packageOrTrace:GetEnum(name)
-	end
-
+	
 	function PackageManager:_GetLocalPackage(localClassTraceOffset)
 		local rootFolderNames = self.RootFolderNames
 
@@ -364,7 +432,7 @@ local PackageManager = {} do
 
 		local scriptName = string.match(names[#names], "(.*):%d+$")
 		if scriptName and scriptName == self.MainScriptName then
-			return true, self.RootPackage
+			return self.RootPackage
 		end
 
 		-- last line is running class
@@ -375,19 +443,19 @@ local PackageManager = {} do
 			
 			for rootName in next, rootFolderNames do
 				if potentialPackageName == rootName then
-					return true, self.RootPackage
+					return self.RootPackage
 				end 
 			end
 
 			local package = self:GetPackage(potentialPackageName, true)
 			if package then
-				return true, package
+				return package
 			end
 		end
-
-		return false, lastLine
+		
+		errorf("cannot extract package name from trace '%s'", lastLine)
 	end
-
+	
 	buildclass("PackageManager", PackageManager)
 end
 
@@ -436,14 +504,9 @@ local Kernel = {} do
 	
 	local expectclasstype = baseLibrary.expectclasstype
 
-	function Kernel:GetClass(fullName : string)
-		expecttype(fullName, "string")
-		return self._PackageManager:GetClass(fullName)
-	end
-
-	function Kernel:GetLocalClass(name : string)
-		expecttype(name, "string")
-		return expectclasstype(self._PackageManager:GetLocalClass(name, 1, false), name)
+	function Kernel:GetClass(path : string)
+		expecttype(path, "string")
+		return self._PackageManager:GetClass(path, 1)
 	end
 
 	function Kernel:GetLibrary(name : string)
@@ -451,14 +514,9 @@ local Kernel = {} do
 		return self._LibrariesCollector:GetLibrary(name):GetReturnValue()
 	end
 
-	function Kernel:GetEnum(fullName : string)
-		expecttype(fullName, "string")
-		return self._PackageManager:GetEnum(fullName)
-	end
-
-	function Kernel:GetLocalEnum(name : string)
-		expecttype(name, "string")
-		return self._PackageManager:GetLocalEnum(name, 1)
+	function Kernel:GetEnum(path : string)
+		expecttype(path, "string")
+		return self._PackageManager:GetEnum(path, 1)
 	end
 
 	function Kernel:FinalizeClasses()

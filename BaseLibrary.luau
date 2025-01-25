@@ -62,18 +62,6 @@ local function compare<T>(what : T, t0 : T?, t1 : T?,
 	return false
 end
 
-local function istype_handler(myType : string, expectedType : string, ... : string)
-	if myType == expectedType then
-		return true
-	end
-
-	if select('#', ...) > 0 then
-		return istype_handler(myType, ...)
-	end
-
-	return false
-end
-
 local function istype(value, ...)
 	return compare(type(value), ...)
 end
@@ -109,8 +97,9 @@ local CLASS_MEMBER_ATTRIBUTES = "__member_attriutes"
 local CLASS_ATTRIBUTES = "__class_attriutes"
 
 local CLASS_CONSTRUCTOR = "constructor"
-local CLASS_DESTRUCTOR = "Destroy"
+local CLASS_DESTRUCTOR = "destructor"
 local CLASS_OBJECT_CREATOR = "new"
+local CLASS_OBJECT_DESTRUCTOR = "Destroy"
 
 local INSTANCE_ID = "__instanceId"
 
@@ -152,9 +141,18 @@ end
 
 -- utility
 
-local function removeindex(table_, item)
-	table.remove(table_, assert(table.find(table_, item), "invalid item index"))
+local function removeindex(array, item)
+	local pos = table.find(array, item)
+	if pos then
+		return table.remove(array, pos)
+	end
 end
+
+local function removeindexthrow(array, item)
+	assert(select('#', removeindex(array, item)) > 0, "invalid item index")
+	return item -- table.remove would return passed
+end
+
 
 local inext = ipairs({})
 
@@ -431,6 +429,9 @@ local function getclassname(instance)
 	return getrawclassname(class)
 end
 
+local function isinstanceofclass(instance, class)
+	return getclassid(instance) == getrawclassid(class)
+end
 
 local DuskObject = {} do
 
@@ -438,7 +439,7 @@ local DuskObject = {} do
 
 	if informerSettings.Enabled then
 
-		local InformUseError = informerSettings.InformUseError
+		local informUseErrorInsteadOfWarn = informerSettings.InformUseErrorInsteadOfWarn
 
 		local informAliveThread = informerSettings.InformAliveThread
 		local informAliveRBXScriptConnection = informerSettings.InformAliveRBXScriptConnection
@@ -446,7 +447,7 @@ local DuskObject = {} do
 
 		local function inform(fieldSymbol, value, message)
 			local formatted = string.format("%s = %s (%s)", tostring(fieldSymbol), tostring(value), message)
-			if InformUseError then
+			if informUseErrorInsteadOfWarn then
 				error(formatted, 4)
 			else
 				warn(debug.traceback(formatted, 4))
@@ -491,7 +492,7 @@ local DuskObject = {} do
 		end
 
 		local clearAndBlock = informerSettings.ClearAndBlock
-		function DuskObject:Destroy()
+		function DuskObject:destructor()
 			local classType = self.__type .. "."
 			for field, item in next, self do
 				validate(classType .. "<field>", field)
@@ -526,7 +527,7 @@ local function iterateClassMethods(class)
 			if type(nextValue) == "function" and string.sub(nextKey, 1, 2) ~= "__" then
 				return nextKey, nextValue
 			end
-			
+
 			nextKey, nextValue = next(class, nextKey)
 		end
 
@@ -550,7 +551,8 @@ local methodLinker do
 
 			self.Classes = {}
 			self.MethodToImplementation = {}
-
+			self.DidFinalize = false
+			
 			return self
 		end
 
@@ -568,20 +570,25 @@ local methodLinker do
 
 		function MethodLinker:Finalize()
 			local methodToImplementation = self.MethodToImplementation
-			if not next(methodToImplementation) then return end
 
 			local unresolvedMethodImplementation = false
-
+			
 			for _, class in next, self.Classes do
 
 				for methodName, method in iterateClassMethods(class) do
-					if methodName == "new" then continue end
+					if methodName == CLASS_OBJECT_CREATOR
+						or methodName == CLASS_OBJECT_DESTRUCTOR
+					then
+						continue
+					end
 
 					local implementation = methodToImplementation[method]
 					if not implementation then continue end
+					
+					local isPureVirtual = classBuilder.HasMemberAttribute(class, methodName, AttributeType.PureVirtual)
 
 					if implementation == emptyFunction and
-						not classBuilder.HasMemberAttribute(class, methodName, AttributeType.PureVirtual)
+						not isPureVirtual
 					then
 						unresolvedMethodImplementation = true
 
@@ -591,7 +598,7 @@ local methodLinker do
 						continue
 					end
 
-					class[methodName] = implementation
+					rawset(class, methodName, implementation)
 				end
 
 				local hasNoFreeze = hasClassAttribute(class, AttributeType.NoFreeze)
@@ -608,12 +615,14 @@ local methodLinker do
 			if unresolvedMethodImplementation then
 				error("unresolved method implementation")
 			end
+			
+			self.DidFinalize = true
 		end
 
 		function MethodLinker:RegisterClassImplementation(originalClass, implementationClass)
 			for methodName, method in next, implementationClass do
-				local declaredMethod = originalClass[methodName]
-				self.MethodToImplementation[declaredMethod] = method
+				local declaredMethod = rawget(originalClass, methodName)
+				self:RegisterImplementation(declaredMethod, method)
 			end
 		end
 
@@ -678,7 +687,7 @@ do -- classBuilder
 				return false
 			end
 
-			return memberAttributes[type]
+			return not not memberAttributes[type]
 		end
 
 		function ClassBuilder.HasMemberAttribute(class, memberName, type)
@@ -747,9 +756,17 @@ do -- classBuilder
 				end
 
 				for memberName, member in next, rawget(baseClass, CLASS_OWN_MEMBERS) do
+
 					if memberName == CLASS_OBJECT_CREATOR
-						or memberName == CLASS_CONSTRUCTOR
-						or string.sub(memberName, 1, 2) == "__" then
+						or memberName == CLASS_OBJECT_DESTRUCTOR
+					then
+						print("declaration at", getFullDebugInfo(baseClass, memberName), baseClass)
+						error(`cannot define reserved '{memberName}()'`)
+					end
+
+					if memberName == CLASS_CONSTRUCTOR
+						or string.sub(memberName, 1, 2) == "__"
+					then
 						continue
 					end
 
@@ -851,16 +868,16 @@ do -- classBuilder
 			if not debugModeEnabled then return end
 
 			local class = self.Class
-			local className = self.ClassName
 
 			local debugModeSettings = kernelSettings.DebugMode
 
 			if debugModeSettings.AddTostringMetamethod then
-				local index = rawget(class, "__tostring")
-				if index == nil then
-					rawset(class, "__tostring", function(self)
-						return tostring(self[INSTANCE_ID]) .. "_" .. self[CLASS_TYPENAME]
-					end)
+				local currentTostring = rawget(class, "__tostring")
+				if currentTostring == nil then
+					local function __tostring(self)
+						return tostring(rawget(self, INSTANCE_ID) .. "_" .. rawget(self, CLASS_TYPENAME))
+					end
+					rawset(class, "__tostring", __tostring)
 				end
 			end
 
@@ -868,58 +885,15 @@ do -- classBuilder
 
 				local finalMemberFunction = memberFunction
 
-				if debugModeSettings.LogCalls then
-					local ignoreSpecialMethodCallLog = debugModeSettings.IgnoreSpecialMethodCallLog
-
-					if ignoreSpecialMethodCallLog
-						and table.find(debugModeSettings.SpecialMethodNames, memberName) then
-						continue
-					end
-
-					local lastFunction = finalMemberFunction
-					finalMemberFunction = function(...)
-						local arguments = ""
-
-						local isMethod = false
-
-						local first = ...
-						if type(first) == "table" and first[CLASS_TYPENAME] == className then
-							isMethod = true
-						end
-
-						local argSize = select("#", ...)
-						for i = isMethod and 2 or 1, argSize do
-							local separator = ""
-
-							if i < argSize then
-								separator ..= ", "
-							end
-
-							arguments ..= tostring(select(i, ...)) .. separator
-						end
-
-						warnf("%s%s%s%s(%s)",
-							string.rep("  ", getcallstacksize()),
-							isMethod and tostring(first) or className,
-							isMethod and ":" or ".",
-							memberName,
-							arguments
-						)
-
-						return lastFunction(...)
-					end
-
-				end
-
 				if memberName == CLASS_OBJECT_CREATOR then
 					class[memberName] = function(...)
 						local instance = finalMemberFunction(...)
-						instance[INSTANCE_ID] = instanceIndex
+						rawset(instance, INSTANCE_ID, instanceIndex)
 						instanceIndex += 1
 						return instance
 					end
 				else
-					class[memberName] = finalMemberFunction
+					rawset(class, memberName, finalMemberFunction)
 				end
 			end
 
@@ -954,9 +928,6 @@ do -- classBuilder
 			local destructors = self.Destructors
 			if #destructors > 0 then
 
-				-- destructor call order is reversed
-				-- derived -> base
-
 				if logClassBuildingProcess then
 					print(self.ClassName, "destructors:")
 					for _, destructor in next, destructors do
@@ -964,16 +935,19 @@ do -- classBuilder
 					end
 				end
 
+				-- destructor call order is reversed
+				-- derived -> base
+
 				finalDestructor = function(self)
-					for _, destructor in next, destructors do
-						destructor(self)
+					for i = #destructors, 1, -1 do
+						destructors[i](self)
 					end
 				end
 			else
 				finalDestructor = emptyFunction
 			end
 
-			rawset(class, CLASS_DESTRUCTOR, finalDestructor)
+			rawset(class, CLASS_OBJECT_DESTRUCTOR, finalDestructor)
 		end
 
 		local function parseAttributeString(attributeString)
@@ -1013,8 +987,10 @@ do -- classBuilder
 		local attributeInfo do
 
 			local function pureVirtualHandler(classBuilder, memberName)
-				classBuilder.OwnMembers[memberName] = createPureVirtualMethodHandler(classBuilder.Class, memberName)
+				local handler = createPureVirtualMethodHandler(classBuilder.Class, memberName)
+				classBuilder:AddOwnMember(memberName, handler)
 				classBuilder:HandleAttribute({AttributeType.Virtual, memberName}, true)
+				methodLinker:RegisterDeclaration(classBuilder.Class[memberName])
 			end
 
 			local function declarationHandler(classBuilder, memberName)
@@ -1057,7 +1033,7 @@ do -- classBuilder
 				if memberName then
 					error(`invalid attribute type '{attributeType}' of '{self.ClassName}'`)
 				else
-					error(`invalid attribute type '{attributeType}' of '{self.ClassName}::{memberName}'`)
+					error(`invalid attribute type '{attributeType}' of '{self.ClassName}.{memberName}'`)
 				end
 			end
 
@@ -1105,7 +1081,6 @@ do -- classBuilder
 		end
 
 		function ClassBuilder:HandleMembers(name)
-			local ownMembers = self.OwnMembers
 			local class = self.Class
 
 			if logClassBuildingProcess then
@@ -1113,28 +1088,30 @@ do -- classBuilder
 			end
 
 			local scratch = table.clone(class)
-			for name, memberOrValue in next, scratch do
+			for name, methodOrValue in next, scratch do
 				if name == CLASS_BASE then continue end
 
 				if isAttribute(name) then
-					self:HandleAttributeField(name, memberOrValue)
+					self:HandleAttributeField(name, methodOrValue)
 				else
 
 					if not self.HasMemberAttribute_attributes(self.MemberAttributes,
 						name, AttributeType.PureVirtualVirtual)
 					then
-
-						if logClassBuildingProcess then
-							print("\t own member", name)
-						end
-
-						ownMembers[name] = memberOrValue
+						self:AddOwnMember(name, methodOrValue)
 					end
 
 				end
 			end
 		end
 
+		function ClassBuilder:AddOwnMember(name, methodOrValue)
+			if logClassBuildingProcess then
+				print("\t own member", name)
+			end
+			self.OwnMembers[name] = methodOrValue
+		end
+		
 		function ClassBuilder:AssignClassBuildInfo()
 			local class = self.Class
 			rawset(class, CLASS_OWN_MEMBERS, self.OwnMembers)
@@ -1192,6 +1169,7 @@ end
 
 
 local function buildclass(className, class, ...)
+	assert(not methodLinker.DidFinalize, "cannot build class after class finalization phase")
 	classBuilder:Build(className, class, ...)
 	return class
 end
@@ -1244,6 +1222,7 @@ library.warne = warne
 library.warnl = warnl
 
 library.removeindex = removeindex
+library.removeindexthrow = removeindexthrow
 library.inext = inext
 
 library.readbit = readbit
@@ -1274,6 +1253,7 @@ library.getrawclassid = getrawclassid
 library.getrawclassname = getrawclassname
 library.getclassid = getclassid
 library.getclassname = getclassname
+library.isinstanceofclass = isinstanceofclass
 
 table.freeze(library)
 
