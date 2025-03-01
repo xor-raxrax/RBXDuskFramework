@@ -158,77 +158,40 @@ local inext = ipairs({})
 
 -- expanded output
 
-local outputSettings = {
-	max_layer = 12,
-	use_type_instead_tostring = true,
-	ignore_tostring_metatable = true,
-	add_instance_class_name = true,
-	normalize_string = true,
-	add_closure_type = true,
-}
 
-local escape = {
-	['\\'] = '\\\\',
-	['\a'] = '\\a',
-	['\b'] = '\\b',
-	['\f'] = '\\f',
-	['\n'] = '\\n',
-	['\r'] = '\\r',
-	['\t'] = '\\t',
-	['\v'] = '\\v',
-	['\"'] = '\\"',
-	['\''] = '\\\''
-}
+local formatvalue
+local layerOutput
+local expandedOutput
 
-local function formatvalue(v)
-	local vtype = type(v)
+do
 
-	if vtype == "string" then
-		v = string.format("\"%s\"", string.gsub(v, "[\\\a\b\f\n\r\t\v\"\']", escape))
+	local outputSettings = {
+		max_layer = 12,
+		use_type_instead_tostring = true,
+		ignore_tostring_metatable = true,
+		add_instance_class_name = true,
+		normalize_string = true,
+		add_closure_type = true,
+	}
 
-		if outputSettings.normalize_string then
-			local success, normalized = pcall(utf8.nfcnormalize, v)
-			if success then
-				return normalized
-			end
-		end
+	local escape = {
+		['\\'] = '\\\\',
+		['\a'] = '\\a',
+		['\b'] = '\\b',
+		['\f'] = '\\f',
+		['\n'] = '\\n',
+		['\r'] = '\\r',
+		['\t'] = '\\t',
+		['\v'] = '\\v',
+		['\"'] = '\\"',
+		['\''] = '\\\''
+	}
 
-	elseif vtype == "table" then
+	function formatvalue(v)
+		local vtype = type(v)
 
-		local metatable = getmetatable(v)
-		if metatable then
-
-			local __tostringValue = rawget(metatable, "__tostring")
-			if __tostringValue then
-
-				if outputSettings.ignore_tostring_metatable then
-					return tostring(v)
-				end
-
-				rawset(metatable, "__tostring", nil)
-				local result = tostring(v)
-				rawset(metatable, "__tostring", __tostringValue)
-
-				return result
-			end
-
-			return tostring(v)
-		end
-
-		if outputSettings.use_type_instead_tostring then
-			return "<table>"
-		end
-
-	elseif vtype == "userdata" then
-		vtype = typeof(v)
-		if vtype == "Instance" then
-
-			local className = ""
-			if outputSettings.add_instance_class_name then
-				className = v.ClassName .. ": "
-			end
-
-			v = string.format("Instance: %s\"%s\"", className, string.gsub(v:GetFullName(), "[\\\a\b\f\n\r\t\v\"\']", escape))
+		if vtype == "string" then
+			v = string.format("\"%s\"", string.gsub(v, "[\\\a\b\f\n\r\t\v\"\']", escape))
 
 			if outputSettings.normalize_string then
 				local success, normalized = pcall(utf8.nfcnormalize, v)
@@ -237,76 +200,122 @@ local function formatvalue(v)
 				end
 			end
 
-		else
-			if outputSettings.use_type_instead_tostring then
-				return "<" .. vtype .. ">"
-			end
+		elseif vtype == "table" then
 
-			return string.format("%s(%s)", vtype, tostring(v))
-		end
-	elseif vtype == "vector" then
-		return string.format("Vector3(%s)", tostring(v))
-	elseif vtype == "function" then
+			local metatable = getmetatable(v)
+			if metatable then
 
-		if outputSettings.use_type_instead_tostring then
-			if outputSettings.add_closure_type then
-				if islclosure(v) then
-					return "<lclosure>"
+				local __tostringValue = rawget(metatable, "__tostring")
+				if __tostringValue then
+
+					if outputSettings.ignore_tostring_metatable then
+						return tostring(v)
+					end
+
+					rawset(metatable, "__tostring", nil)
+					local result = tostring(v)
+					rawset(metatable, "__tostring", __tostringValue)
+
+					return result
 				end
-				return "<cclosure>"
+
+				return tostring(v)
 			end
-			return "<function>"
+
+			if outputSettings.use_type_instead_tostring then
+				return "<table>"
+			end
+
+		elseif vtype == "userdata" then
+			vtype = typeof(v)
+			if vtype == "Instance" then
+
+				local className = ""
+				if outputSettings.add_instance_class_name then
+					className = v.ClassName .. ": "
+				end
+
+				v = string.format("Instance: %s\"%s\"", className, string.gsub(v:GetFullName(), "[\\\a\b\f\n\r\t\v\"\']", escape))
+
+				if outputSettings.normalize_string then
+					local success, normalized = pcall(utf8.nfcnormalize, v)
+					if success then
+						return normalized
+					end
+				end
+
+			else
+				if outputSettings.use_type_instead_tostring then
+					return "<" .. vtype .. ">"
+				end
+
+				return string.format("%s(%s)", vtype, tostring(v))
+			end
+		elseif vtype == "vector" then
+			return string.format("Vector3(%s)", tostring(v))
+		elseif vtype == "function" then
+
+			if outputSettings.use_type_instead_tostring then
+				if outputSettings.add_closure_type then
+					if islclosure(v) then
+						return "<lclosure>"
+					end
+					return "<cclosure>"
+				end
+				return "<function>"
+			end
+
 		end
 
+		return v
 	end
 
-	return v
-end
+	local printedTables = {}
 
-local printedTables = {}
+	function expandedOutput(outputFunction, ...)
+		local maxLayer = outputSettings.max_layer
 
-local function expandedOutput(outputFunction, ...)
-	local maxLayer = outputSettings.max_layer
+		local layer = 0
+		table.clear(printedTables)
 
-	local layer = 0
-	table.clear(printedTables)
+		local function printl(t)
+			if layer == maxLayer then return end
 
-	local function printl(t)
-		if layer == maxLayer then return end
+			local tab = string.rep('\t', layer)
 
-		local tab = string.rep('\t', layer)
+			if table.find(printedTables, t) then
+				outputFunction(tab, "*** already printed ***")
+				return
+			end
 
-		if table.find(printedTables, t) then
-			outputFunction(tab, "*** already printed ***")
-			return
+			table.insert(printedTables, t)
+
+			for i, v in next, t do
+				outputFunction(tab, i, formatvalue(v))
+				if type(v) == "table" then
+					layer = layer + 1
+					printl(v)
+					layer = layer - 1
+				end
+			end
 		end
 
-		table.insert(printedTables, t)
-
-		for i, v in next, t do
-			outputFunction(tab, i, formatvalue(v))
+		for i = 1, select("#", ...) do
+			local v = select(i, ...)
 			if type(v) == "table" then
-				layer = layer + 1
 				printl(v)
-				layer = layer - 1
+			else
+				outputFunction(v)
 			end
 		end
 	end
 
-	for i = 1, select("#", ...) do
-		local v = select(i, ...)
-		if type(v) == "table" then
-			printl(v)
-		else
-			outputFunction(v)
+	function layerOutput(outputFunction, t)
+		for i, v in next, t do
+			outputFunction(i, formatvalue(v))
 		end
 	end
-end
 
-local function layerOutput(outputFunction, t)
-	for i, v in next, t do
-		outputFunction(i, formatvalue(v))
-	end
 end
 
 local function printe(...)
@@ -411,26 +420,30 @@ do
 	setmetatable(classToNameMap, invalidIndexHandler)
 end
 
-local function getrawclassid(class)
+
+local function getclassof(instance)
+	local class = getmetatable(instance)
+	return class
+end
+
+local function getclassid(class)
 	return classToIdMap[class]
 end
 
-local function getrawclassname(class)
+local function getclassname(class)
 	return classToNameMap[class]
 end
 
-local function getclassid(instance)
-	local class = getmetatable(instance)
-	return getrawclassid(class)
+local function getclassidof(instance)
+	return getclassid(getclassof(instance))
 end
 
-local function getclassname(instance)
-	local class = getmetatable(instance)
-	return getrawclassname(class)
+local function getclassnameof(instance)
+	return getclassname(getclassof(instance))
 end
 
-local function isinstanceofclass(instance, class)
-	return getclassid(instance) == getrawclassid(class)
+local function isclassof(class, instance)
+	return class == getclassof(instance)
 end
 
 local DuskObject = {} do
@@ -506,8 +519,8 @@ local DuskObject = {} do
 				table.clear(self)
 
 				self.__info_objectCopy = copy
-				self.__info_className = getrawclassname(myClass)
-				self.__info_classId = getrawclassid(myClass)
+				self.__info_className = getclassname(myClass)
+				self.__info_classId = getclassid(myClass)
 				self.__info_class = myClass
 
 				setmetatable(self, actionBlocker)
@@ -1249,11 +1262,12 @@ library.isclass = isclass
 
 library.buildclass = buildclass
 
-library.getrawclassid = getrawclassid
-library.getrawclassname = getrawclassname
+library.getclassof = getclassof
 library.getclassid = getclassid
 library.getclassname = getclassname
-library.isinstanceofclass = isinstanceofclass
+library.getclassidof = getclassidof
+library.getclassnameof = getclassnameof
+library.isclassof = isclassof
 
 table.freeze(library)
 

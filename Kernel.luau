@@ -356,6 +356,11 @@ local PackageManager = {} do
 		end
 		
 		local package = self:_GetLocalPackage(localClassTraceOffset + 1)
+		if package == self.RootPackage then
+			-- cannot have dot as first symbol in root
+			return string.sub(path, 2, -1)
+		end
+		
 		return package.FullName .. path
 	end
 	
