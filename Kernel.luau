@@ -37,6 +37,10 @@ local Module = {} do
 		end
 
 		local result = require(self._Instance)
+		if type(result) ~= "table" then
+			error(`expected 'table' value to be returned, got '{type(result)}'\nfrom module '{self._Instance:GetFullName()}'`)
+		end
+
 		self._ReturnValue = result
 		self._IsInitialized = true
 		return result
