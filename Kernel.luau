@@ -23,12 +23,15 @@ local function createFullName(namePrefix : string, name : string)
 end
 
 local Module = {} do
-
-	function Module:constructor(module : ModuleScript)
+	Module.__index = Module
+	
+	function Module.new(module : ModuleScript)
+		local self = setmetatable({}, Module)
 		self.Name = module.Name
 		self._Instance = module
 		self._IsInitialized = false
 		self._ReturnValue = nil
+		return self
 	end
 
 	function Module:GetReturnValue()
@@ -40,24 +43,25 @@ local Module = {} do
 		if type(result) ~= "table" then
 			error(`expected 'table' value to be returned, got '{type(result)}'\nfrom module '{self._Instance:GetFullName()}'`)
 		end
-
+		
 		self._ReturnValue = result
 		self._IsInitialized = true
 		return result
 	end
 
-	buildclass("Module", Module)
 end
 
 local ModuleCollector = {} do
-
-	function ModuleCollector:constructor()
+	ModuleCollector.__index = ModuleCollector
+	
+	function ModuleCollector.new()
+		local self = setmetatable({}, ModuleCollector)
 		self.CollectedModules = {}
+		return self
 	end
 
-	ModuleCollector.__attr_purevirtual_Collect = true
 	function ModuleCollector:Collect(root : Instance)
-
+		error("pure virtual method")
 	end
 
 	function ModuleCollector:AddModule(name : string, module)
@@ -73,15 +77,14 @@ local ModuleCollector = {} do
 		self.CollectedModules[name] = module
 	end
 
-	buildclass("ModuleCollector", ModuleCollector)
 end
 
-local LibraryCollector = {} do
+local LibraryCollector = setmetatable({}, ModuleCollector) do
+	LibraryCollector.__index = LibraryCollector
 
-	LibraryCollector.__base = { ModuleCollector }
-
-	function LibraryCollector:constructor()
-		ModuleCollector.constructor(self)
+	function LibraryCollector.new()
+		local self = setmetatable(ModuleCollector.new(), LibraryCollector)
+		return self
 	end
 
 	function LibraryCollector:Collect(rootFolder : Instance)
@@ -100,17 +103,16 @@ local LibraryCollector = {} do
 		return module
 	end
 
-	buildclass("LibraryCollector", LibraryCollector)
 end
 
-local ClassModule = {} do
-
-	ClassModule.__base = { Module }
-
-	function ClassModule:constructor(module : ModuleScript, fullName : string)
-		Module.constructor(self, module)
+local ClassModule = setmetatable({}, Module) do
+	ClassModule.__index = ClassModule
+	
+	function ClassModule.new(module : ModuleScript, fullName : string)
+		local self = setmetatable(Module.new(module), ClassModule)
 		expecttype(fullName, "string")
 		self.FullName = fullName
+		return self
 	end
 
 	function ClassModule:GetReturnValueAsClass()
@@ -124,19 +126,16 @@ local ClassModule = {} do
 		return class
 	end
 
-	buildclass("ClassModule", ClassModule)
 end
 
-local Package = {} do
-
-	Package.__base = { ModuleCollector }
-
-	function Package:constructor(packageManager, folder, name, prefixName)
-		local fullName = createFullName(prefixName, name)
-		ModuleCollector.constructor(self)
+local Package = setmetatable({}, ModuleCollector) do
+	Package.__index = Package
+	
+	function Package.new(packageManager, folder, name, prefixName)
+		local self = setmetatable(ModuleCollector.new(), Package)
 
 		self.Name = name
-		self.FullName = fullName
+		self.FullName = createFullName(prefixName, name)
 		self.Folder = folder
 		self.Enums = nil
 
@@ -144,6 +143,8 @@ local Package = {} do
 		self._EnumsModule = nil
 		self._ModuleNameToImplementation = {}
 		self._Packages = {}
+		
+		return self
 	end
 
 	function Package:GetClass(name)
@@ -206,7 +207,7 @@ local Package = {} do
 		self._EnumsModule = enumsModule
 	end
 
-	function Package:RegisterClass(child)
+	function Package:RegisterClass(child : ModuleScript)
 		local fileName = child.Name
 		local moduleName, extension = string.match(fileName, "(.+)%.([^%.]+)$")
 
@@ -257,14 +258,13 @@ local Package = {} do
 		end
 	end
 
-	buildclass("Package", Package)
 end
 
 local findSimilarFields do
-	
+
 	local THRESHOLD = 2
 	local PRIMARY_RESULTS_SIZE = 5
-	
+
 	local function longestCommonSubstring(a: string, b: string)
 		local maxLength = 0
 		local endPos = 0
@@ -323,27 +323,32 @@ local findSimilarFields do
 
 		return primary, secondary
 	end
-	
+
 end
 
 local PackageManager = {} do
-
-	function PackageManager:constructor(classesFolders, mainScript)
+	PackageManager.__index = PackageManager
+	
+	function PackageManager.new(classesFolders, mainScript)
+		local self = setmetatable({}, PackageManager)
+		
 		self.Packages = {}
 		self.Classes = {}
 		self.Enums = {}
-		
+
 		local rootFolderNames = {}
 		for _, folder in next, classesFolders do
 			rootFolderNames[folder.Name] = 1
 		end
-		
+
 		self.RootFolderNames = rootFolderNames
 		self.MainScriptName = mainScript.Name
 		self.RootPackage = nil
+		
+		return self
 	end
 
-	function PackageManager:RegisterClass(fullName : string, module)
+	function PackageManager:RegisterClass(fullName : string, module : ClassModule)
 		self.Classes[fullName] = module
 	end
 
@@ -352,25 +357,25 @@ local PackageManager = {} do
 			self.Enums[createFullName(packageName, enumName)] = enum
 		end
 	end
-	
+
 	-- ".class" aka "relative path" syntax support
 	function PackageManager:PathToFullName(path : string, localClassTraceOffset)
 		if string.sub(path, 1, 1) ~= '.' then
 			return path
 		end
-		
+
 		local package = self:_GetLocalPackage(localClassTraceOffset + 1)
 		if package == self.RootPackage then
 			-- cannot have dot as first symbol in root
 			return string.sub(path, 2, -1)
 		end
-		
+
 		return package.FullName .. path
 	end
-	
+
 	function PackageManager:GetClass(path : string, localClassTraceOffset)
 		local fullName = self:PathToFullName(path, localClassTraceOffset + 1)
-		
+
 		local classModule = self.Classes[fullName]
 		if not classModule then
 			local suggestions = findSimilarFields(fullName, self.Classes)
@@ -381,12 +386,13 @@ local PackageManager = {} do
 				errorf("'%s' is invalid class module full name", fullName)
 			end
 		end
+		
 		return classModule:GetReturnValueAsClass()
 	end
 
 	function PackageManager:GetEnum(path : string, localClassTraceOffset)
 		local fullName = self:PathToFullName(path, localClassTraceOffset + 1)
-		
+
 		local enums = self.Enums[fullName]
 		if not enums then
 			local suggestions = findSimilarFields(fullName, self.Enums)
@@ -408,13 +414,13 @@ local PackageManager = {} do
 		self.Packages[name] = package
 		return package
 	end
-	
+
 	function PackageManager:BuildRootPackage(folder)
 		local root = self:BuildPackage(folder, "", "")
 		self.RootPackage = root
 		return root
 	end
-	
+
 	function PackageManager:GetPackage(name, noThrow)
 		local package = self.Packages[name]
 		if package then
@@ -425,7 +431,7 @@ local PackageManager = {} do
 			errorf("'%s' is invalid package name", name)
 		end
 	end
-	
+
 	function PackageManager:_GetLocalPackage(localClassTraceOffset)
 		local rootFolderNames = self.RootFolderNames
 
@@ -449,7 +455,7 @@ local PackageManager = {} do
 
 		for i = #names, 1, -1 do
 			local potentialPackageName = names[i]
-			
+
 			for rootName in next, rootFolderNames do
 				if potentialPackageName == rootName then
 					return self.RootPackage
@@ -461,27 +467,29 @@ local PackageManager = {} do
 				return package
 			end
 		end
-		
+
 		errorf("cannot extract package name from trace '%s'", lastLine)
 	end
-	
-	buildclass("PackageManager", PackageManager)
+
 end
 
 local Kernel = {} do
-
-	function Kernel:constructor(
+	Kernel.__index = Kernel
+	
+	function Kernel.new(
 		classesFolders : {Instance},
 		librariesFolders : {Instance},
 		mainScript : ModuleScript
 	)
+		local self = setmetatable({}, Kernel)
+		
 		expectrbxtype(classesFolders, "table")
 		expectrbxtype(librariesFolders, "table")
 		expectrbxtype(mainScript, "Instance")
-		
+
 		local libraryCollector = LibraryCollector.new()
 		local packageManager = PackageManager.new(classesFolders, mainScript)
-		
+
 		self._MainScript = mainScript
 		self._AreClassesFinalized = false
 		self._PackageManager = packageManager
@@ -496,13 +504,15 @@ local Kernel = {} do
 			expectrbxtype(classFolder, "Instance")
 			rootPackage:Collect(classFolder)
 		end
-		
+
 		for _, libraryFolder in next, librariesFolders do
 			expectrbxtype(libraryFolder, "Instance")
 			libraryCollector:Collect(libraryFolder)
 		end
+		
+		return self
 	end
-	
+
 	function Kernel:_InvokeMain()
 		require(self._MainScript)
 
@@ -510,7 +520,7 @@ local Kernel = {} do
 			warn("classes are not finalized after running 'Main' module\nwrite 'shared.kernel:FinalizeClasses()' after all your imports")
 		end
 	end
-	
+
 	local expectclasstype = baseLibrary.expectclasstype
 
 	function Kernel:GetClass(path : string)
@@ -532,7 +542,7 @@ local Kernel = {} do
 		if self._AreClassesFinalized then
 			error("classes are already finalized")
 		end
-		
+
 		self._AreClassesFinalized = true
 		for packageName, package in next, self._PackageManager.Packages do
 
@@ -542,14 +552,13 @@ local Kernel = {} do
 			end
 		end
 
-		baseLibrary.__linkimplementations()
+		baseLibrary.__finalizeclasses()
 	end
 
 	function Kernel:GetBaseLibrary()
 		return baseLibrary
 	end
 
-	buildclass("Kernel", Kernel)
 end
 
 return Kernel

@@ -552,99 +552,7 @@ end
 
 local emptyFunction = function()end
 
-local classBuilder
-
-local methodLinker do
-
-	local MethodLinker = {} do
-		MethodLinker.__index = MethodLinker
-
-		function MethodLinker.new()
-			local self = setmetatable({}, MethodLinker)
-
-			self.Classes = {}
-			self.MethodToImplementation = {}
-			self.DidFinalize = false
-			
-			return self
-		end
-
-		function MethodLinker:RegisterClass(class)
-			table.insert(self.Classes, class)
-		end
-
-		function MethodLinker:RegisterDeclaration(method)
-			self.MethodToImplementation[method] = emptyFunction
-		end
-
-		function MethodLinker:RegisterImplementation(method, implementation)
-			self.MethodToImplementation[method] = implementation
-		end
-
-		function MethodLinker:Finalize()
-			local methodToImplementation = self.MethodToImplementation
-
-			local unresolvedMethodImplementation = false
-			
-			for _, class in next, self.Classes do
-
-				for methodName, method in iterateClassMethods(class) do
-					if methodName == CLASS_OBJECT_CREATOR
-						or methodName == CLASS_OBJECT_DESTRUCTOR
-					then
-						continue
-					end
-
-					local implementation = methodToImplementation[method]
-					if not implementation then continue end
-					
-					local isPureVirtual = classBuilder.HasMemberAttribute(class, methodName, AttributeType.PureVirtual)
-
-					if implementation == emptyFunction and
-						not isPureVirtual
-					then
-						unresolvedMethodImplementation = true
-
-						warnf("unresolved method implementation of %s",
-							getFullDebugInfo(class, methodName))
-
-						continue
-					end
-
-					rawset(class, methodName, implementation)
-				end
-
-				local hasNoFreeze = hasClassAttribute(class, AttributeType.NoFreeze)
-
-				if not debugModeEnabled then
-					classBuilder.RemoveBuildInfo(class)
-				end
-
-				if not hasNoFreeze then
-					table.freeze(class)
-				end
-			end
-
-			if unresolvedMethodImplementation then
-				error("unresolved method implementation")
-			end
-			
-			self.DidFinalize = true
-		end
-
-		function MethodLinker:RegisterClassImplementation(originalClass, implementationClass)
-			for methodName, method in next, implementationClass do
-				local declaredMethod = rawget(originalClass, methodName)
-				self:RegisterImplementation(declaredMethod, method)
-			end
-		end
-
-	end
-
-	methodLinker = MethodLinker.new()
-end
-
-do -- classBuilder
+local ClassBuilder do
 
 	local alwaysInheritDuskObject = kernelSettings.AlwaysInheritDuskObject
 	local logClassBuildingProcess = kernelSettings.LogClassBuildingProcess
@@ -670,22 +578,23 @@ do -- classBuilder
 		return string.sub(name, 1, #attributePrefix) == attributePrefix
 	end
 
-	local ClassBuilder = {} do
+	ClassBuilder = {} do
 		ClassBuilder.__index = ClassBuilder
 
-		function ClassBuilder.new()
+		function ClassBuilder.new(class, className, classId)
 			local self = setmetatable({}, ClassBuilder)
-
-			self.Class = nil
-			self.ClassName = nil
-
-			self.MemberAttributes = nil
-			self.ClassAttributes = nil
-			self.OwnMembers = nil
-			self.ClassIdCounter = 0
-
-			self.ClassesWithDeclarations = {}
-
+			
+			self.Class = class
+			self.ClassName = className
+			self.ClassId = classId
+			
+			self.MemberAttributes = {}
+			self.ClassAttributes = {}
+			self.OwnMembers = {}
+			self.Destructors = {}
+			self.MethodToImplementation = {}
+			self.ObjectCreator = emptyFunction
+			
 			return self
 		end
 
@@ -823,7 +732,6 @@ do -- classBuilder
 			end
 		end
 
-		local instanceIndex = 0
 		function ClassBuilder:HandleObjectCreators()
 			local class = self.Class
 
@@ -865,7 +773,7 @@ do -- classBuilder
 			if constructor then
 				self.ObjectCreator = function(...)
 					local object = setmetatable({}, class)
-					constructor(object, ...)
+					assert(select('#', constructor(object, ...)) == 0, "constructor cannot return anything")
 					return object
 				end
 			else
@@ -877,6 +785,7 @@ do -- classBuilder
 			class[CLASS_CONSTRUCTOR] = constructor
 		end
 
+		local instanceIndex = 0
 		function ClassBuilder:HandleDebug()
 			if not debugModeEnabled then return end
 
@@ -912,18 +821,21 @@ do -- classBuilder
 
 		end
 
-		function ClassBuilder:InitAndValidateInheritance(...)
+		function ClassBuilder:InitAndValidateInheritance(additionalBaseClasses)
 			local class = self.Class
 			local baseClasses = rawget(class, CLASS_BASE)
 
 			if not baseClasses then
-				baseClasses = {...}
+				baseClasses = {}
 				rawset(class, CLASS_BASE, baseClasses)
+			end
 
-				for _, baseClass in next, baseClasses do
-					if baseClass == class then
-						error("recursive inheritance is not allowed")
-					end
+			table.move(additionalBaseClasses, 1, #additionalBaseClasses, #baseClasses, baseClasses)
+
+			for _, baseClass in next, baseClasses do
+				if baseClass == class then
+					warn(`base classes of '{self.ClassName}':`, baseClasses)
+					error("recursive inheritance is not allowed")
 				end
 			end
 		end
@@ -1003,11 +915,11 @@ do -- classBuilder
 				local handler = createPureVirtualMethodHandler(classBuilder.Class, memberName)
 				classBuilder:AddOwnMember(memberName, handler)
 				classBuilder:HandleAttribute({AttributeType.Virtual, memberName}, true)
-				methodLinker:RegisterDeclaration(classBuilder.Class[memberName])
+				classBuilder:RegisterDeclaration(classBuilder.Class[memberName])
 			end
 
 			local function declarationHandler(classBuilder, memberName)
-				methodLinker:RegisterDeclaration(classBuilder.Class[memberName])
+				classBuilder:RegisterDeclaration(classBuilder.Class[memberName])
 			end
 
 			attributeInfo = {
@@ -1124,7 +1036,7 @@ do -- classBuilder
 			end
 			self.OwnMembers[name] = methodOrValue
 		end
-		
+
 		function ClassBuilder:AssignClassBuildInfo()
 			local class = self.Class
 			rawset(class, CLASS_OWN_MEMBERS, self.OwnMembers)
@@ -1143,56 +1055,155 @@ do -- classBuilder
 			rawset(class, CLASS_MEMBER_ATTRIBUTES, nil)
 			rawset(class, CLASS_ATTRIBUTES, nil)
 		end
-
-		function ClassBuilder:Build(className, class, ...)
-			self.Class = class
-			self.ClassName = className
-
-			self.MemberAttributes = {}
-			self.ClassAttributes = {}
-			self.OwnMembers = {}
-			self.Destructors = {}
-
-			self.ObjectCreator = emptyFunction
-
+		
+		function ClassBuilder:SetImportPhaseGuards()
+			local class = self.Class
+			rawset(class, CLASS_OBJECT_CREATOR, function(...)
+				error("cannot create class object before finalization")
+			end)
+			rawset(class, CLASS_OBJECT_DESTRUCTOR, function(...)
+				error("cannot destroy class object before finalization")
+			end)
+		end
+		
+		function ClassBuilder:Build(additionalBaseClasses)
 			self:HandleMembers()
 			self:AssignClassBuildInfo()
-			self:InitAndValidateInheritance(...)
+			self:InitAndValidateInheritance(additionalBaseClasses)
 			self:SetIndex()
 			self:ProcessInheritance()
-			self:HandleObjectCreators()
-			self:HandleDebug()
-			self:BuildDestructor()
-
-			class[CLASS_OBJECT_CREATOR] = self.ObjectCreator
+			self:SetImportPhaseGuards()
 
 			self:RegisterBuiltClass()
 		end
 
 		function ClassBuilder:RegisterBuiltClass()
-			classToIdMap[self.Class] = self.ClassIdCounter
+			classToIdMap[self.Class] = self.ClassId
 			classToNameMap[self.Class] = self.ClassName
+		end
+		
+	
+		function ClassBuilder:RegisterDeclaration(method)
+			self.MethodToImplementation[method] = emptyFunction
+		end
+
+		function ClassBuilder:RegisterImplementation(method, implementation)
+			self.MethodToImplementation[method] = implementation
+		end
+
+		function ClassBuilder:Finalize()
+			local class = self.Class
+			local methodToImplementation = self.MethodToImplementation
+
+			local unresolvedMethodImplementation = false
+
+			for methodName, method in iterateClassMethods(class) do
+				if methodName == CLASS_OBJECT_CREATOR
+					or methodName == CLASS_OBJECT_DESTRUCTOR
+				then
+					continue
+				end
+
+				local implementation = methodToImplementation[method]
+				if not implementation then continue end
+
+				local isPureVirtual = self.HasMemberAttribute(class, methodName, AttributeType.PureVirtual)
+
+				if implementation == emptyFunction and
+					not isPureVirtual
+				then
+					unresolvedMethodImplementation = true
+
+					warnf("unresolved method implementation of %s",
+						getFullDebugInfo(class, methodName))
+
+					continue
+				end
+
+				rawset(class, methodName, implementation)
+			end
+
+			if unresolvedMethodImplementation then
+				error("unresolved method implementation")
+			end
+			
+			self:HandleObjectCreators()
+			self:HandleDebug()
+			self:BuildDestructor()
+			
+			rawset(class, CLASS_OBJECT_CREATOR, self.ObjectCreator)
+			
+			local hasNoFreeze = hasClassAttribute(class, AttributeType.NoFreeze)
+			
+			if not debugModeEnabled then
+				self.RemoveBuildInfo(class)
+			end
+
+			if not hasNoFreeze then
+				table.freeze(class)
+			end
+		end
+
+		function ClassBuilder:RegisterImplementations(originalClass, implementationMap)
+			for methodName, method in next, implementationMap do
+				local declaredMethod = rawget(originalClass, methodName)
+				self:RegisterImplementation(declaredMethod, method)
+			end
+		end
+
+	end
+
+end
+
+local buildDirector do
+
+	local BuildDirector = {} do
+		BuildDirector.__index = BuildDirector
+		
+		function BuildDirector.new()
+			local self = setmetatable({}, BuildDirector)
+
+			self.DidFinalize = false
+			self.ClassIdCounter = 0
+			self.ClassToBuilder = {}
+
+			return self
+		end
+
+		function BuildDirector:Finalize()
+			for class, builder in next, self.ClassToBuilder do
+				builder:Finalize()
+			end
+		end
+
+		function BuildDirector:AddClass(class, name, additionalBaseClasses)
+			local builder = ClassBuilder.new(class, name, self.ClassIdCounter)
+			self.ClassToBuilder[class] = builder
+			builder:Build(additionalBaseClasses)
 			self.ClassIdCounter += 1
-			methodLinker:RegisterClass(self.Class)
+		end
+
+		function BuildDirector:RegisterImplementations(class, implementationMap)
+			self.ClassToBuilder[class]:RegisterImplementations(class, implementationMap)
 		end
 	end
 
-	classBuilder = ClassBuilder.new()
+	buildDirector = BuildDirector.new()
 end
 
-
 local function buildclass(className, class, ...)
-	assert(not methodLinker.DidFinalize, "cannot build class after class finalization phase")
-	classBuilder:Build(className, class, ...)
+	assert(not buildDirector.DidFinalize, "cannot build class after class finalization phase")
+	local additionalBaseClasses = {...}
+	buildDirector:AddClass(class, className, additionalBaseClasses)
 	return class
 end
 
-local function __linkimplementations()
-	methodLinker:Finalize()
+local function __finalizeclasses()
+	buildDirector:Finalize()
 end
 
 local function __registerimplementation(originalClass, implementationClass)
-	methodLinker:RegisterClassImplementation(originalClass, implementationClass)
+	buildDirector:RegisterImplementations(originalClass, implementationClass)
 end
 
 local function readbit(n, index)
@@ -1213,21 +1224,25 @@ end
 
 buildclass("DuskObject", DuskObject)
 
-local badIndexGuard = {}
-function badIndexGuard:__index(k)
-	warn("base library content:", self)
-	errorf("base library does not have item '%s'", k)
+local function createdadindexguard(name)
+	local badIndexGuard = {}
+	function badIndexGuard:__index(k)
+		warn(`{name} content:`, self)
+		errorf(`{name} does not have item '%s'`, k)
+	end
+	return badIndexGuard
 end
 
-local library = setmetatable({}, badIndexGuard)
+local library = setmetatable({}, createdadindexguard("base library"))
 
-library.__linkimplementations = __linkimplementations
+library.__finalizeclasses = __finalizeclasses
 library.__registerimplementation = __registerimplementation
+
+library.createdadindexguard = createdadindexguard
 
 library.printf = printf
 library.warnf = warnf
 library.errorf = errorf
-
 library.formatvalue = formatvalue
 library.printe = printe
 library.printl = printl
