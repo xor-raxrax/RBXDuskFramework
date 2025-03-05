@@ -491,7 +491,7 @@ local Kernel = {} do
 		local packageManager = PackageManager.new(classesFolders, mainScript)
 
 		self._MainScript = mainScript
-		self._AreClassesFinalized = false
+		self._Finalized = false
 		self._PackageManager = packageManager
 		self._LibrariesCollector = libraryCollector
 
@@ -516,34 +516,40 @@ local Kernel = {} do
 	function Kernel:_InvokeMain()
 		require(self._MainScript)
 
-		if not self._AreClassesFinalized then
+		if not self._Finalized then
 			warn("classes are not finalized after running 'Main' module\nwrite 'shared.kernel:FinalizeClasses()' after all your imports")
 		end
 	end
 
 	local expectclasstype = baseLibrary.expectclasstype
-
+	
+	function Kernel:_CheckFinalization(actionName : string)
+		if self._Finalized then
+			error(`cannot {actionName} after finalization`)
+		end
+	end
+	
 	function Kernel:GetClass(path : string)
 		expecttype(path, "string")
+		self:_CheckFinalization("import")
 		return self._PackageManager:GetClass(path, 1)
 	end
 
 	function Kernel:GetLibrary(name : string)
 		expecttype(name, "string")
+		self:_CheckFinalization("import")
 		return self._LibrariesCollector:GetLibrary(name):GetReturnValue()
 	end
 
 	function Kernel:GetEnum(path : string)
 		expecttype(path, "string")
+		self:_CheckFinalization("import")
 		return self._PackageManager:GetEnum(path, 1)
 	end
 
 	function Kernel:FinalizeClasses()
-		if self._AreClassesFinalized then
-			error("classes are already finalized")
-		end
-
-		self._AreClassesFinalized = true
+		self:_CheckFinalization("finalize")
+		
 		for packageName, package in next, self._PackageManager.Packages do
 
 			for moduleName, implementationModule in next, package._ModuleNameToImplementation do
@@ -552,6 +558,7 @@ local Kernel = {} do
 			end
 		end
 
+		self._Finalized = true
 		baseLibrary.__finalizeclasses()
 	end
 

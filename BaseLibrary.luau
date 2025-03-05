@@ -109,7 +109,7 @@ local function getDebugInfo(method)
 end
 
 local function getFullDebugInfo(class, methodName)
-	return `'{class.__type}.{methodName}' ({getDebugInfo(class[methodName])})`
+	return `'{rawget(class, CLASS_TYPENAME)}.{methodName}' ({getDebugInfo(rawget(class, methodName))})`
 end
 
 
@@ -413,6 +413,7 @@ do
 
 	local invalidIndexHandler = {}
 	function invalidIndexHandler:__index(class)
+		expectclass(class)
 		errorf("Passed class '%s' is not registered in class map", tostring(rawget(class, CLASS_TYPENAME)))
 	end
 
@@ -577,7 +578,7 @@ local ClassBuilder do
 	local function isAttribute(name)
 		return string.sub(name, 1, #attributePrefix) == attributePrefix
 	end
-
+	
 	ClassBuilder = {} do
 		ClassBuilder.__index = ClassBuilder
 
@@ -630,8 +631,16 @@ local ClassBuilder do
 		end
 
 		local function collectInherited(result, currentClass)
-			for _, baseClass in next, rawget(currentClass, CLASS_BASE) do
+			local baseClasses = rawget(currentClass, CLASS_BASE)
+			
+			for _, baseClass in next, baseClasses do
 				if table.find(result, baseClass) then continue end
+
+				if not istype(baseClass, "table") or not rawget(classToNameMap, baseClass) then
+					local myType = rawget(currentClass, CLASS_TYPENAME)
+					error(`'{CLASS_TYPENAME}' items of '{myType}' must be built classes, got '{type(baseClass)}'`)
+				end
+				
 				collectInherited(result, baseClass)
 				table.insert(result, baseClass)
 			end
@@ -660,6 +669,18 @@ local ClassBuilder do
 			return allInheritedClasses
 		end
 
+		local function importCreatorGuard(...)
+			error("cannot create class object before finalization")
+		end
+		local function importDestructorGuard(...)
+			error("cannot destroy class object before finalization")
+		end
+
+		local function raiseReservedMethodDeclarationError(class, memberName)
+			print("declaration at", getFullDebugInfo(class, memberName), class)
+			error(`cannot define reserved '{memberName}()'`)
+		end
+		
 		function ClassBuilder:ProcessInheritance()
 			local class = self.Class
 			local allInheritedClasses = self:CollectInheritedClasses()
@@ -678,13 +699,6 @@ local ClassBuilder do
 				end
 
 				for memberName, member in next, rawget(baseClass, CLASS_OWN_MEMBERS) do
-
-					if memberName == CLASS_OBJECT_CREATOR
-						or memberName == CLASS_OBJECT_DESTRUCTOR
-					then
-						print("declaration at", getFullDebugInfo(baseClass, memberName), baseClass)
-						error(`cannot define reserved '{memberName}()'`)
-					end
 
 					if memberName == CLASS_CONSTRUCTOR
 						or string.sub(memberName, 1, 2) == "__"
@@ -828,8 +842,14 @@ local ClassBuilder do
 			if not baseClasses then
 				baseClasses = {}
 				rawset(class, CLASS_BASE, baseClasses)
+			else
+				
+				if not istype(baseClasses, "table") then
+					error(`reserved '{CLASS_TYPENAME}' field of '{self.ClassName}' must be a table`)
+				end
+				
 			end
-
+			
 			table.move(additionalBaseClasses, 1, #additionalBaseClasses, #baseClasses, baseClasses)
 
 			for _, baseClass in next, baseClasses do
@@ -1005,25 +1025,24 @@ local ClassBuilder do
 			self.ClassAttributes[type] = value
 		end
 
-		function ClassBuilder:HandleMembers(name)
+		function ClassBuilder:RegisterOwnMembersAndAttributes()
 			local class = self.Class
 
 			if logClassBuildingProcess then
 				print(self.ClassName, "own members:")
 			end
 
-			local scratch = table.clone(class)
-			for name, methodOrValue in next, scratch do
-				if name == CLASS_BASE then continue end
-
-				if isAttribute(name) then
-					self:HandleAttributeField(name, methodOrValue)
+			for memberName, methodOrValue in next, class do
+				if memberName == CLASS_BASE then continue end
+				
+				if isAttribute(memberName) then
+					self:HandleAttributeField(memberName, methodOrValue)
 				else
 
 					if not self.HasMemberAttribute_attributes(self.MemberAttributes,
-						name, AttributeType.PureVirtualVirtual)
+						memberName, AttributeType.PureVirtualVirtual)
 					then
-						self:AddOwnMember(name, methodOrValue)
+						self:AddOwnMember(memberName, methodOrValue)
 					end
 
 				end
@@ -1055,20 +1074,31 @@ local ClassBuilder do
 			rawset(class, CLASS_MEMBER_ATTRIBUTES, nil)
 			rawset(class, CLASS_ATTRIBUTES, nil)
 		end
-		
+
 		function ClassBuilder:SetImportPhaseGuards()
 			local class = self.Class
-			rawset(class, CLASS_OBJECT_CREATOR, function(...)
-				error("cannot create class object before finalization")
-			end)
-			rawset(class, CLASS_OBJECT_DESTRUCTOR, function(...)
-				error("cannot destroy class object before finalization")
-			end)
+			rawset(class, CLASS_OBJECT_CREATOR, importCreatorGuard)
+			rawset(class, CLASS_OBJECT_DESTRUCTOR, importDestructorGuard)
+		end
+		
+		function ClassBuilder:ValidateReservedMembers()
+			local class = self.Class
+
+			local member = rawget(class, CLASS_OBJECT_CREATOR)
+			if member and member ~= importCreatorGuard then
+				raiseReservedMethodDeclarationError(class, CLASS_OBJECT_CREATOR)
+			end
+
+			local member = rawget(class, CLASS_OBJECT_DESTRUCTOR)
+			if member and member ~= importDestructorGuard then
+				raiseReservedMethodDeclarationError(class, CLASS_OBJECT_DESTRUCTOR)
+			end
 		end
 		
 		function ClassBuilder:Build(additionalBaseClasses)
-			self:HandleMembers()
+			self:RegisterOwnMembersAndAttributes()
 			self:AssignClassBuildInfo()
+			self:ValidateReservedMembers()
 			self:InitAndValidateInheritance(additionalBaseClasses)
 			self:SetIndex()
 			self:ProcessInheritance()
@@ -1224,7 +1254,7 @@ end
 
 buildclass("DuskObject", DuskObject)
 
-local function createdadindexguard(name)
+local function createbadindexguard(name)
 	local badIndexGuard = {}
 	function badIndexGuard:__index(k)
 		warn(`{name} content:`, self)
@@ -1233,12 +1263,12 @@ local function createdadindexguard(name)
 	return badIndexGuard
 end
 
-local library = setmetatable({}, createdadindexguard("base library"))
+local library = setmetatable({}, createbadindexguard("base library"))
 
 library.__finalizeclasses = __finalizeclasses
 library.__registerimplementation = __registerimplementation
 
-library.createdadindexguard = createdadindexguard
+library.createbadindexguard = createbadindexguard
 
 library.printf = printf
 library.warnf = warnf
